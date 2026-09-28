@@ -1,0 +1,740 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Visualizador de Logs</title>
+<style>
+:root{
+  --bg:#f6f7f9; --panel:#fff; --text:#1d2330; --muted:#6b7280; --line:#e3e6eb; --hover:#f0f3f8; --sel:#e3ecfb;
+  --accent:#2563eb; --erro:#dc2626; --erro-bg:#fde8e8; --ok:#15803d; --ok-bg:#e3f5e8; --dbg:#8a94a6; --dbg-bg:#eef0f4;
+  --code:#f3f4f6; --warn:#b45309;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --bg:#12151b; --panel:#1a1e26; --text:#e3e7ee; --muted:#9099a8; --line:#2b313c; --hover:#222834; --sel:#1f3050;
+    --accent:#6ea0ff; --erro:#f87171; --erro-bg:#3b1d1f; --ok:#4ade80; --ok-bg:#16301f; --dbg:#8a94a6; --dbg-bg:#262b35;
+    --code:#11141a; --warn:#fbbf24;
+  }
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font:13px/1.4 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;display:flex;flex-direction:column}
+button,input,select{font:inherit;color:inherit}
+button{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 10px;cursor:pointer}
+button:hover{background:var(--hover)}
+button.primary{background:var(--accent);color:#fff;border-color:var(--accent)}
+input,select{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:4px 8px}
+input[type=checkbox]{padding:0}
+header{display:flex;align-items:center;gap:12px;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+header h1{font-size:15px;margin:0 8px 0 0}
+.muted{color:var(--muted)}
+.tabs{display:flex;gap:2px;margin-left:auto}
+.tabs button{border-radius:6px 6px 0 0;border-bottom:none}
+.tabs button.on{background:var(--sel);font-weight:600}
+.filters{display:flex;flex-wrap:wrap;gap:8px;align-items:center;padding:8px 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+.filters label{display:flex;align-items:center;gap:4px}
+.filters input[type=search]{width:280px}
+.chip{display:inline-flex;align-items:center;gap:4px;border:1px solid var(--line);border-radius:999px;padding:2px 10px;cursor:pointer;user-select:none;background:var(--panel)}
+.chip.off{opacity:.45;text-decoration:line-through}
+.chip.tag{background:var(--sel);cursor:default}
+.chip.tag b{cursor:pointer;margin-left:4px}
+.dot{width:9px;height:9px;border-radius:50%;display:inline-block;flex:none}
+.dot.erro{background:var(--erro)} .dot.sucesso{background:var(--ok)} .dot.debug{background:var(--dbg)}
+main{flex:1;min-height:0;display:flex}
+.view{flex:1;min-height:0;display:none}
+.view.on{display:flex}
+#drop{flex:1;display:flex;align-items:center;justify-content:center;flex-direction:column;gap:12px;border:2px dashed var(--line);margin:30px;border-radius:12px;color:var(--muted);font-size:15px}
+#drop.over{border-color:var(--accent);color:var(--accent)}
+.list{flex:1;min-width:0;overflow:auto}
+.detail{width:48%;min-width:280px;flex:none;border-left:1px solid var(--line);background:var(--panel);overflow:auto;padding:12px 14px}
+.splitter{width:6px;flex:none;cursor:col-resize;background:transparent;margin-right:-3px;margin-left:-3px;z-index:2;position:relative}
+.splitter:hover,.splitter.drag{background:var(--accent);opacity:.5}
+body.resizing{cursor:col-resize;user-select:none}
+table{border-collapse:collapse;width:100%;table-layout:fixed}
+th,td{text-align:left;padding:5px 8px;border-bottom:1px solid var(--line);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;vertical-align:top}
+th{position:sticky;top:0;background:var(--panel);font-weight:600;z-index:1;font-size:12px;color:var(--muted)}
+tbody tr{cursor:pointer}
+tbody tr:hover{background:var(--hover)}
+tbody tr.sel{background:var(--sel)}
+td.num,th.num{text-align:right}
+.mono{font-family:ui-monospace,Consolas,monospace;font-size:12px}
+.badge{display:inline-block;padding:1px 7px;border-radius:4px;font-size:11px;font-weight:600}
+.badge.erro{background:var(--erro-bg);color:var(--erro)} .badge.sucesso{background:var(--ok-bg);color:var(--ok)} .badge.debug{background:var(--dbg-bg);color:var(--dbg)}
+.more{padding:10px;text-align:center}
+.kv{display:grid;grid-template-columns:110px 1fr;gap:3px 10px;margin:8px 0 12px}
+.kv div:nth-child(odd){color:var(--muted)}
+.actions{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px}
+.tl{border-left:2px solid var(--line);margin-left:6px}
+.tl details{margin:0 0 2px 0;padding-left:12px;position:relative}
+.tl details>summary{list-style:none;cursor:pointer;padding:4px 6px;border-radius:5px;display:flex;gap:8px;align-items:baseline}
+.tl details>summary::-webkit-details-marker{display:none}
+.tl details>summary:hover{background:var(--hover)}
+.tl details[open]>summary{background:var(--sel)}
+.tl .dot{position:absolute;left:-5.5px;top:9px}
+.tl .t{font-family:ui-monospace,Consolas,monospace;font-size:11px;color:var(--muted);flex:none}
+.tl .msg{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl .tp{flex:none;font-size:11px;color:var(--muted)}
+.tl .dur{flex:none;font-size:11px;font-family:ui-monospace,Consolas,monospace}
+.tl .body{padding:6px 6px 10px}
+.full{white-space:pre-wrap;word-break:break-all;margin:0 0 6px}
+pre.payload{background:var(--code);border:1px solid var(--line);border-radius:6px;padding:8px;max-height:420px;overflow:auto;white-space:pre-wrap;word-break:break-all;margin:4px 0 8px;font-size:12px}
+.plabel{display:flex;gap:8px;align-items:center;font-weight:600;font-size:12px;margin-top:4px}
+.warn{color:var(--warn);font-weight:normal}
+.erro-txt{color:var(--erro)}
+.summary{flex:1;overflow:auto;padding:14px}
+.kpis{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.kpi{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 14px;min-width:140px}
+.kpi b{display:block;font-size:22px}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(420px,1fr));gap:14px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:8px;padding:10px 12px;min-width:0}
+.card h3{margin:0 0 8px;font-size:13px}
+.card table td,.card table th{position:static}
+.card td.click{cursor:pointer;color:var(--accent)}
+.card td.click:hover{text-decoration:underline}
+.hist{display:flex;align-items:flex-end;gap:2px;height:160px;border-bottom:1px solid var(--line);padding-top:6px}
+.hist .bar{flex:1;display:flex;flex-direction:column-reverse;cursor:pointer;min-width:4px}
+.hist .bar:hover{opacity:.75}
+.hist .bar span{display:block}
+.histx{display:flex;gap:2px;font-size:10px;color:var(--muted)}
+.histx span{flex:1;text-align:center;overflow:hidden}
+.empty{padding:30px;text-align:center;color:var(--muted)}
+#loading{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:10;color:#fff;font-size:16px}
+@media (max-width:900px){.detail{width:100% !important;min-width:0;border-left:none}.splitter{display:none}.view.on{flex-direction:column}.filters input[type=search]{width:100%}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Visualizador de Logs</h1>
+  <button class="primary" id="btnOpen">Abrir CSV</button>
+  <input type="file" id="file" accept=".csv,text/csv" hidden>
+  <span id="fileInfo" class="muted"></span>
+  <label class="muted" title="Logs do mesmo identificador separados por mais que este intervalo viram eventos diferentes">Separar eventos após
+    <input type="number" id="gap" value="60" min="1" style="width:70px"> s sem logs</label>
+  <div class="tabs">
+    <button data-tab="eventos" class="on">Eventos</button>
+    <button data-tab="logs">Logs</button>
+    <button data-tab="resumo">Resumo</button>
+  </div>
+</header>
+<div class="filters" id="filters" hidden>
+  <input type="search" id="q" placeholder="Buscar identificador ou mensagem…">
+  <label><input type="checkbox" id="qPayload"> buscar no payload</label>
+  <select id="fInteg"><option value="">Integração: todas</option></select>
+  <select id="fTipo"><option value="">Tipo: todos</option></select>
+  <span class="chip" data-st="erro"><span class="dot erro"></span>Erro</span>
+  <span class="chip" data-st="sucesso"><span class="dot sucesso"></span>Sucesso</span>
+  <span class="chip" data-st="debug"><span class="dot debug"></span>Só debug</span>
+  <label class="muted">de <input type="datetime-local" id="fFrom" step="1"></label>
+  <label class="muted">até <input type="datetime-local" id="fTo" step="1"></label>
+  <select id="sort">
+    <option value="start_desc">Mais recentes</option>
+    <option value="start_asc">Mais antigos</option>
+    <option value="err_desc">Mais erros</option>
+    <option value="dur_desc">Maior duração</option>
+    <option value="cnt_desc">Mais logs</option>
+  </select>
+  <span id="tags"></span>
+  <button id="btnClear">Limpar filtros</button>
+  <span id="count" class="muted"></span>
+</div>
+<main>
+  <div id="drop">
+    <div>Arraste o CSV exportado aqui ou clique em <b>Abrir CSV</b></div>
+    <div style="font-size:12px">Colunas esperadas: Id; IdentificadorUnico; PayloadProcessamento; Tipo; Mensagem; DataCriacao; Severidade; Status; TipoIntegracao</div>
+  </div>
+  <section class="view" id="v-eventos">
+    <div class="list" id="evList"></div>
+    <div class="splitter" title="Arraste para redimensionar (duplo clique restaura)"></div>
+    <div class="detail" id="evDetail"><div class="empty">Selecione um evento</div></div>
+  </section>
+  <section class="view" id="v-logs">
+    <div class="list" id="logList"></div>
+    <div class="splitter" title="Arraste para redimensionar (duplo clique restaura)"></div>
+    <div class="detail" id="logDetail"><div class="empty">Selecione um log</div></div>
+  </section>
+  <section class="view" id="v-resumo">
+    <div class="summary" id="summary"></div>
+  </section>
+</main>
+<div id="loading">Processando…</div>
+
+<script>
+'use strict';
+const $ = s => document.querySelector(s);
+const $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const nf = new Intl.NumberFormat('pt-BR');
+const PAGE = 200;
+const TRUNC = 65535; // limite comum de export de NVARCHAR
+
+const S = {
+  logs: [], events: [], fEvents: [], fLogs: [],
+  integs: [], tipos: [],
+  f: {q:'', payload:false, integ:'', tipo:'', st:{erro:true, sucesso:true, debug:true}, from:null, to:null, tpl:'', ident:''},
+  sort: 'start_desc', tab: 'eventos', evShown: PAGE, logShown: PAGE, selEv: null, selLog: null, hideDebug: false
+};
+
+/* ---------- CSV ---------- */
+function parseCSV(t){
+  const out = []; let i = 0; const n = t.length;
+  if (t.charCodeAt(0) === 0xFEFF) i = 1;
+  const nl = t.indexOf('\n', i);
+  const head = t.slice(i, nl < 0 ? n : nl);
+  const D = (head.split(';').length >= head.split(',').length) ? 59 : 44;
+  let row = [];
+  while (i < n){
+    let val;
+    if (t.charCodeAt(i) === 34){
+      let j = i + 1; const s = j;
+      for(;;){
+        const q = t.indexOf('"', j);
+        if (q < 0){ val = t.slice(s); i = n; break; }
+        if (t.charCodeAt(q + 1) === 34){ j = q + 2; continue; }
+        val = t.slice(s, q); i = q + 1; break;
+      }
+      if (val.indexOf('""') >= 0) val = val.replace(/""/g, '"');
+    } else {
+      let j = i;
+      while (j < n){ const c = t.charCodeAt(j); if (c === D || c === 10 || c === 13) break; j++; }
+      val = t.slice(i, j); i = j;
+    }
+    row.push(val);
+    const c = t.charCodeAt(i);
+    if (c === D) i++;
+    else { if (c === 13) i++; if (t.charCodeAt(i) === 10) i++; out.push(row); row = []; }
+  }
+  if (row.length) out.push(row);
+  return out;
+}
+
+/* ---------- Enriquecimento ---------- */
+const reReq = /^(Request|Response) ([A-Z]+(?: [A-Z]+)*) para (.+)$/s;
+const reErrReq = /^Erro na requisi\S* ([A-Z]+(?: [A-Z]+)*) para (.+?)\.? StatusCode: (\d+)/s;
+const reGuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
+function parseTs(s){
+  // "2026-09-26 00:39:10.9929693" -> hora local
+  const d = new Date(s.slice(0, 23).replace(' ', 'T'));
+  return isNaN(d) ? 0 : d.getTime();
+}
+function template(m){
+  return m.replace(reGuid, '{guid}').replace(/https?:\/\/[^\s?]+\?[^]*?(?=\. StatusCode|$)/, u => u.split('?')[0] + '?…')
+          .replace(/(\brequest\s+)\{[^]*?\}(?=\s+response\b|\s*$)/i, '$1{…}')
+          .replace(/\d+/g, '#').slice(0, 220);
+}
+function enrich(r, idx){
+  const L = {
+    idx, id: r.Id || '', ident: r.IdentificadorUnico || '', payload: r.PayloadProcessamento || '', tipo: r.Tipo || '',
+    msg: r.Mensagem || '', dt: r.DataCriacao || '', sev: r.Severidade || '', status: r.Status || '', integ: r.TipoIntegracao || '',
+  };
+  L.ts = parseTs(L.dt);
+  const m = L.msg;
+  let mm;
+  if ((mm = reReq.exec(m))){
+    L.kind = mm[1] === 'Request' ? 'req' : 'resp';
+    L.method = mm[2];
+    L.url = mm[3].replace(/ \(payload omitido[^)]*\)\s*$/, '');
+    L.key = L.method + ' ' + L.url;
+  } else if ((mm = reErrReq.exec(m))){
+    L.kind = 'reqerr'; L.method = mm[1]; L.url = mm[2]; L.key = L.method + ' ' + L.url; L.http = +mm[3];
+  }
+  const isErr = /erro/i.test(L.status) || /erro/i.test(L.sev) || /^erro\b/i.test(m) || (L.http >= 400);
+  L.lvl = isErr ? 'erro' : (/sucesso/i.test(L.status) ? 'sucesso' : 'debug');
+  if (L.lvl === 'erro') L.tpl = template(m);
+  L.lm = (L.ident + '\u0001' + m).toLowerCase();
+  return L;
+}
+function shortUrl(u){
+  try { const x = new URL(u.split(' ')[0]); return x.host + x.pathname + (x.search ? '?…' : ''); } catch { return u; }
+}
+
+/* ---------- Agrupamento em eventos ---------- */
+function buildEvents(){
+  const gap = Math.max(1, +$('#gap').value || 60) * 1000;
+  const order = S.logs.slice().sort((a, b) => a.ident < b.ident ? -1 : a.ident > b.ident ? 1 : a.ts - b.ts);
+  const evs = []; let cur = null;
+  for (const L of order){
+    if (!cur || cur.ident !== L.ident || L.ts - cur.end > gap){
+      cur = {n: evs.length, ident: L.ident, start: L.ts, end: L.ts, logs: [], err: 0, ok: 0, integs: new Set(), tipos: new Set()};
+      evs.push(cur);
+    }
+    cur.logs.push(L); cur.end = L.ts; L.ev = cur;
+    cur.integs.add(L.integ); cur.tipos.add(L.tipo);
+    if (L.lvl === 'erro') cur.err++; else if (L.lvl === 'sucesso') cur.ok++;
+  }
+  for (const e of evs){
+    e.st = e.err ? 'erro' : e.ok ? 'sucesso' : 'debug';
+    e.dur = e.end - e.start;
+    const pick = e.logs.find(l => l.lvl === 'erro') || [...e.logs].reverse().find(l => l.lvl === 'sucesso') || e.logs[0];
+    e.title = pick.msg;
+    e.integTxt = [...e.integs].join(', ');
+    e.tipoTxt = [...e.tipos].join(', ');
+    e.dt = e.logs[0].dt;
+  }
+  S.events = evs;
+}
+
+/* ---------- Filtros ---------- */
+function logMatchText(L, q, payload){
+  if (L.lm.indexOf(q) >= 0) return true;
+  if (payload && L.payload){ if (L.lp === undefined) L.lp = L.payload.toLowerCase(); return L.lp.indexOf(q) >= 0; }
+  return false;
+}
+function applyFilters(){
+  const f = S.f, q = f.q.trim().toLowerCase();
+  const from = f.from ? new Date(f.from).getTime() : -Infinity;
+  const to = f.to ? new Date(f.to).getTime() + 999 : Infinity;
+
+  S.fEvents = S.events.filter(e => {
+    if (!f.st[e.st]) return false;
+    if (e.end < from || e.start > to) return false;
+    if (f.ident && e.ident !== f.ident) return false;
+    if (f.integ && !e.integs.has(f.integ)) return false;
+    if (f.tipo && !e.tipos.has(f.tipo)) return false;
+    if (f.tpl && !e.logs.some(l => l.tpl === f.tpl)) return false;
+    if (q && !e.logs.some(l => logMatchText(l, q, f.payload))) return false;
+    return true;
+  });
+  const cmp = {
+    start_desc: (a, b) => b.start - a.start,
+    start_asc: (a, b) => a.start - b.start,
+    err_desc: (a, b) => b.err - a.err || b.start - a.start,
+    dur_desc: (a, b) => b.dur - a.dur,
+    cnt_desc: (a, b) => b.logs.length - a.logs.length,
+  }[S.sort];
+  S.fEvents.sort(cmp);
+
+  S.fLogs = S.logs.filter(L => {
+    if (!f.st[L.lvl]) return false;
+    if (L.ts < from || L.ts > to) return false;
+    if (f.ident && L.ident !== f.ident) return false;
+    if (f.integ && L.integ !== f.integ) return false;
+    if (f.tipo && L.tipo !== f.tipo) return false;
+    if (f.tpl && L.tpl !== f.tpl) return false;
+    if (q && !logMatchText(L, q, f.payload)) return false;
+    return true;
+  });
+  const asc = S.sort === 'start_asc';
+  S.fLogs.sort((a, b) => asc ? a.ts - b.ts : b.ts - a.ts);
+
+  S.evShown = PAGE; S.logShown = PAGE;
+  // item selecionado que saiu da lista filtrada não fica preso no painel de detalhe
+  if (S.selEv && !S.fEvents.includes(S.selEv)){ S.selEv = null; renderEventDetail(); }
+  if (S.selLog && !S.fLogs.includes(S.selLog)){ S.selLog = null; renderLogDetail(); }
+  renderTags(); render();
+}
+function clearSelection(){
+  S.selEv = null; S.selLog = null;
+  $$('#evList tr.sel, #logList tr.sel').forEach(r => r.classList.remove('sel'));
+  renderEventDetail(); renderLogDetail();
+}
+function renderTags(){
+  const t = [];
+  if (S.f.ident) t.push(`<span class="chip tag">Identificador = ${esc(S.f.ident)} <b data-rm="ident">✕</b></span>`);
+  if (S.f.tpl) t.push(`<span class="chip tag" title="${esc(S.f.tpl)}">Erro: ${esc(S.f.tpl.slice(0, 60))}… <b data-rm="tpl">✕</b></span>`);
+  $('#tags').innerHTML = t.join(' ');
+}
+
+/* ---------- Formatação ---------- */
+function fmtDur(ms){
+  if (ms < 1000) return ms + ' ms';
+  if (ms < 60000) return (ms / 1000).toFixed(2).replace('.', ',') + ' s';
+  const s = Math.round(ms / 1000); const h = Math.floor(s / 3600), m = Math.floor(s % 3600 / 60), ss = s % 60;
+  return (h ? h + 'h ' : '') + m + 'min ' + String(ss).padStart(2, '0') + 's';
+}
+const hms = dt => dt.slice(11, 23);
+const stLabel = {erro: 'Erro', sucesso: 'Sucesso', debug: 'Só debug'};
+
+/* ---------- Render ---------- */
+function render(){
+  $('#count').textContent = S.tab === 'logs'
+    ? `${nf.format(S.fLogs.length)} logs`
+    : `${nf.format(S.fEvents.length)} eventos`;
+  if (S.tab === 'eventos') renderEvents();
+  else if (S.tab === 'logs') renderLogs();
+  else renderSummary();
+}
+
+function renderEvents(){
+  const list = S.fEvents;
+  if (!list.length){ $('#evList').innerHTML = '<div class="empty">Nenhum evento com esses filtros</div>'; return; }
+  const rows = list.slice(0, S.evShown).map(e => `
+    <tr data-ev="${e.n}" class="${S.selEv === e ? 'sel' : ''}">
+      <td><span class="dot ${e.st}" title="${stLabel[e.st]}"></span></td>
+      <td class="mono">${esc(hms(e.dt))}</td>
+      <td class="num mono">${fmtDur(e.dur)}</td>
+      <td class="mono" title="${esc(e.ident)}">${esc(e.ident)}</td>
+      <td title="${esc(e.integTxt)}">${esc(e.integTxt)}</td>
+      <td title="${esc(e.tipoTxt)}">${esc(e.tipoTxt)}</td>
+      <td class="num">${e.logs.length}</td>
+      <td class="num ${e.err ? 'erro-txt' : ''}">${e.err || ''}</td>
+      <td title="${esc(e.title)}" class="${e.st === 'erro' ? 'erro-txt' : ''}">${esc(e.title)}</td>
+    </tr>`).join('');
+  $('#evList').innerHTML = `<table>
+    <colgroup><col style="width:26px"><col style="width:96px"><col style="width:80px"><col style="width:150px"><col style="width:90px"><col style="width:150px"><col style="width:48px"><col style="width:44px"><col></colgroup>
+    <thead><tr><th></th><th>Início</th><th class="num">Duração</th><th>Identificador</th><th>Integração</th><th>Tipo(s)</th><th class="num">Logs</th><th class="num">Erros</th><th>Resumo</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    ${list.length > S.evShown ? `<div class="more"><button data-more="ev">Mostrar mais (${nf.format(list.length - S.evShown)} restantes)</button></div>` : ''}`;
+}
+
+function renderLogs(){
+  const list = S.fLogs;
+  if (!list.length){ $('#logList').innerHTML = '<div class="empty">Nenhum log com esses filtros</div>'; return; }
+  const rows = list.slice(0, S.logShown).map(L => `
+    <tr data-log="${L.idx}" class="${S.selLog === L ? 'sel' : ''}">
+      <td><span class="dot ${L.lvl}"></span></td>
+      <td class="mono">${esc(hms(L.dt))}</td>
+      <td class="mono" title="${esc(L.ident)}">${esc(L.ident)}</td>
+      <td>${esc(L.integ)}</td>
+      <td>${esc(L.tipo)}</td>
+      <td class="${L.lvl === 'erro' ? 'erro-txt' : ''}" title="${esc(L.msg.slice(0, 500))}">${esc(L.msg.slice(0, 400))}</td>
+      <td class="num muted">${L.payload ? nf.format(L.payload.length) : ''}</td>
+    </tr>`).join('');
+  $('#logList').innerHTML = `<table>
+    <colgroup><col style="width:26px"><col style="width:96px"><col style="width:150px"><col style="width:90px"><col style="width:130px"><col><col style="width:70px"></colgroup>
+    <thead><tr><th></th><th>Hora</th><th>Identificador</th><th>Integração</th><th>Tipo</th><th>Mensagem</th><th class="num">Payload</th></tr></thead>
+    <tbody>${rows}</tbody></table>
+    <div class="more">
+      ${list.length > S.logShown ? `<button data-more="log">Mostrar mais (${nf.format(list.length - S.logShown)} restantes)</button>` : ''}
+      <button id="btnExport">Exportar logs filtrados (CSV)</button>
+    </div>`;
+}
+
+function prettyPayload(p){
+  if (!p) return '';
+  const t = p.trim();
+  if (t[0] === '{' || t[0] === '['){
+    try { return JSON.stringify(JSON.parse(t), null, 2); } catch {}
+  }
+  return p;
+}
+function payloadBlock(label, L){
+  if (!L.payload) return `<div class="plabel">${label} <span class="muted">(sem payload)</span></div>`;
+  const tr = L.payload.length >= TRUNC ? `<span class="warn">⚠ ${nf.format(L.payload.length)} caracteres: provavelmente truncado no export</span>` : '';
+  return `<div class="plabel">${label} ${tr} <button data-copy="${L.idx}">copiar</button></div><pre class="payload" data-pl="${L.idx}"></pre>`;
+}
+function logBody(L){
+  return `<div class="full mono">${esc(L.msg)}</div>
+    <div class="muted" style="font-size:11px;margin-bottom:4px">${esc(L.dt)} · ${esc(L.integ)} · ${esc(L.tipo)} · Severidade: ${esc(L.sev)} · Status: ${esc(L.status)} · Id: ${esc(L.id)}</div>
+    ${payloadBlock('Payload', L)}`;
+}
+
+/* Linha do tempo do evento, juntando Request + Response/Erro com o mesmo método e URL */
+function timeline(e){
+  const items = []; const pending = new Map(); const used = new Set();
+  for (const L of e.logs){
+    if (L.kind === 'req'){
+      const it = {req: L, t: L.ts}; items.push(it);
+      if (!pending.has(L.key)) pending.set(L.key, []);
+      pending.get(L.key).push(it);
+    } else if ((L.kind === 'resp' || L.kind === 'reqerr') && pending.get(L.key)?.length){
+      const it = pending.get(L.key).shift();
+      if (L.kind === 'resp') it.resp = L; else it.err = L;
+      used.add(L);
+    } else items.push({log: L, t: L.ts});
+  }
+  return items;
+}
+function renderEventDetail(){
+  const e = S.selEv, box = $('#evDetail');
+  if (!e){ box.innerHTML = '<div class="empty">Selecione um evento</div>'; return; }
+  const items = timeline(e);
+  const html = items.map(it => {
+    if (it.req){
+      const end = it.err || it.resp;
+      const lvl = it.err ? 'erro' : (it.resp ? (it.resp.lvl) : 'debug');
+      if (S.hideDebug && lvl === 'debug') return '';
+      const d = end ? fmtDur(end.ts - it.req.ts) : 'sem resposta';
+      const http = it.err ? ` <span class="erro-txt">HTTP ${it.err.http}</span>` : '';
+      return `<details data-pair="${it.req.idx}">
+        <summary><span class="dot ${lvl}"></span><span class="t">${esc(hms(it.req.dt))} +${fmtDur(it.req.ts - e.start)}</span>
+          <span class="msg mono">${esc(it.req.method)} ${esc(shortUrl(it.req.url))}${http}</span>
+          <span class="dur ${end ? '' : 'warn'}">${d}</span><span class="tp">${esc(it.req.tipo)}</span></summary>
+        <div class="body"></div></details>`;
+    }
+    const L = it.log;
+    if (S.hideDebug && L.lvl === 'debug') return '';
+    return `<details data-one="${L.idx}">
+      <summary><span class="dot ${L.lvl}"></span><span class="t">${esc(hms(L.dt))} +${fmtDur(L.ts - e.start)}</span>
+        <span class="msg ${L.lvl === 'erro' ? 'erro-txt' : ''}">${esc(L.msg.slice(0, 300))}</span><span class="tp">${esc(L.tipo)}</span></summary>
+      <div class="body"></div></details>`;
+  }).join('');
+  const nReq = items.filter(i => i.req).length;
+  box.innerHTML = `
+    <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+      <span class="badge ${e.st}">${stLabel[e.st]}</span>
+      <b class="mono" style="word-break:break-all">${esc(e.ident)}</b>
+      <button data-act="close" title="Fechar (Esc)" style="margin-left:auto">✕</button>
+    </div>
+    <div class="kv">
+      <div>Início</div><div class="mono">${esc(e.logs[0].dt)}</div>
+      <div>Fim</div><div class="mono">${esc(e.logs[e.logs.length - 1].dt)}</div>
+      <div>Duração</div><div>${fmtDur(e.dur)}</div>
+      <div>Logs</div><div>${e.logs.length} (${e.err} erro, ${e.ok} sucesso, ${nReq} chamadas HTTP)</div>
+      <div>Integração</div><div>${esc(e.integTxt)}</div>
+      <div>Tipos</div><div>${esc(e.tipoTxt)}</div>
+    </div>
+    <div class="actions">
+      <button data-act="identEv">Todos os eventos deste identificador</button>
+      <button data-act="identLog">Todos os logs deste identificador</button>
+      <button data-act="copyIdent">Copiar identificador</button>
+      <label class="muted"><input type="checkbox" id="hideDebug" ${S.hideDebug ? 'checked' : ''}> ocultar debug</label>
+    </div>
+    <div class="tl">${html || '<div class="empty">Nada para mostrar</div>'}</div>`;
+}
+function fillDetails(det){
+  const body = det.querySelector('.body');
+  if (body.dataset.done) return;
+  body.dataset.done = 1;
+  if (det.dataset.one){
+    body.innerHTML = logBody(S.logs[+det.dataset.one]);
+  } else {
+    const req = S.logs[+det.dataset.pair];
+    const it = timeline(req.ev).find(i => i.req === req);
+    let h = `<div class="full mono">${esc(req.method)} ${esc(req.url)}</div>
+      <div class="muted" style="font-size:11px;margin-bottom:4px">${esc(req.integ)} · ${esc(req.tipo)}</div>`;
+    h += payloadBlock('Request · ' + esc(hms(req.dt)), req);
+    if (it.resp) h += payloadBlock('Response · ' + esc(hms(it.resp.dt)) + (/payload omitido/.test(it.resp.msg) ? ' <span class="muted">(payload omitido por configuração)</span>' : ''), it.resp);
+    if (it.err) h += `<div class="full erro-txt" style="margin-top:6px">${esc(it.err.msg)}</div>` + payloadBlock('Erro · ' + esc(hms(it.err.dt)), it.err);
+    if (!it.resp && !it.err) h += '<div class="warn">Nenhuma resposta registrada para esta requisição neste evento.</div>';
+    body.innerHTML = h;
+  }
+  body.querySelectorAll('pre[data-pl]').forEach(p => p.textContent = prettyPayload(S.logs[+p.dataset.pl].payload));
+}
+function renderLogDetail(){
+  const L = S.selLog, box = $('#logDetail');
+  if (!L){ box.innerHTML = '<div class="empty">Selecione um log</div>'; return; }
+  box.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span class="badge ${L.lvl}">${stLabel[L.lvl]}</span><b class="mono">${esc(L.ident)}</b><button data-act="close" title="Fechar (Esc)" style="margin-left:auto">✕</button></div>
+    <div class="actions"><button data-act="openEv">Abrir evento deste log</button><button data-act="identLog2">Todos os logs deste identificador</button></div>
+    ${logBody(L)}`;
+  box.querySelectorAll('pre[data-pl]').forEach(p => p.textContent = prettyPayload(S.logs[+p.dataset.pl].payload));
+}
+
+/* ---------- Resumo ---------- */
+function renderSummary(){
+  const E = S.fEvents;
+  const tot = {erro: 0, sucesso: 0, debug: 0}; let nLogs = 0;
+  for (const e of E){ tot[e.st]++; nLogs += e.logs.length; }
+  const idents = new Set(E.map(e => e.ident)).size;
+
+  const byKey = (keyFn) => {
+    const m = new Map();
+    for (const e of E) for (const k of keyFn(e)){
+      let r = m.get(k); if (!r) m.set(k, r = {k, erro: 0, sucesso: 0, debug: 0, n: 0});
+      r[e.st]++; r.n++;
+    }
+    return [...m.values()].sort((a, b) => b.erro - a.erro || b.n - a.n);
+  };
+  const tbl = (rows, field) => `<table><thead><tr><th>${field === 'integ' ? 'Integração' : 'Tipo'}</th><th class="num">Eventos</th><th class="num">Erro</th><th class="num">Sucesso</th><th class="num">Só debug</th></tr></thead><tbody>
+    ${rows.map(r => `<tr><td class="click" data-set="${field}" data-v="${esc(r.k)}">${esc(r.k || '(vazio)')}</td><td class="num">${nf.format(r.n)}</td>
+      <td class="num ${r.erro ? 'erro-txt click' : ''}" ${r.erro ? `data-set="${field}" data-v="${esc(r.k)}" data-only="erro"` : ''}>${nf.format(r.erro)}</td>
+      <td class="num">${nf.format(r.sucesso)}</td><td class="num">${nf.format(r.debug)}</td></tr>`).join('')}</tbody></table>`;
+
+  // erros agrupados por mensagem normalizada
+  const tm = new Map();
+  for (const e of E) for (const l of e.logs) if (l.tpl){
+    let r = tm.get(l.tpl); if (!r) tm.set(l.tpl, r = {tpl: l.tpl, n: 0, ev: new Set(), tipo: l.tipo, integ: l.integ, ex: l});
+    r.n++; r.ev.add(e);
+  }
+  const errs = [...tm.values()].sort((a, b) => b.n - a.n);
+
+  // histograma por hora (início do evento)
+  const hm = new Map();
+  for (const e of E){ const k = e.dt.slice(0, 13); let r = hm.get(k); if (!r) hm.set(k, r = {k, erro: 0, sucesso: 0, debug: 0}); r[e.st]++; }
+  const hours = [...hm.values()].sort((a, b) => a.k < b.k ? -1 : 1);
+  const max = Math.max(1, ...hours.map(h => h.erro + h.sucesso + h.debug));
+  const multiDay = new Set(hours.map(h => h.k.slice(0, 10))).size > 1;
+
+  $('#summary').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span class="muted">Eventos</span><b>${nf.format(E.length)}</b></div>
+      <div class="kpi"><span class="muted">Logs</span><b>${nf.format(nLogs)}</b></div>
+      <div class="kpi"><span class="muted">Identificadores</span><b>${nf.format(idents)}</b></div>
+      <div class="kpi"><span class="muted"><span class="dot erro"></span> Eventos com erro</span><b class="erro-txt">${nf.format(tot.erro)}</b></div>
+      <div class="kpi"><span class="muted"><span class="dot sucesso"></span> Eventos com sucesso</span><b>${nf.format(tot.sucesso)}</b></div>
+      <div class="kpi"><span class="muted"><span class="dot debug"></span> Só debug</span><b>${nf.format(tot.debug)}</b></div>
+    </div>
+    <div class="card" style="margin-bottom:14px">
+      <h3>Eventos por hora de início <span class="muted" style="font-weight:normal">(clique numa barra para filtrar a hora)</span></h3>
+      <div class="hist">${hours.map(h => `<div class="bar" data-hour="${h.k}" title="${h.k}h · erro ${h.erro} · sucesso ${h.sucesso} · só debug ${h.debug}">
+        <span style="height:${h.erro / max * 150}px;background:var(--erro)"></span>
+        <span style="height:${h.sucesso / max * 150}px;background:var(--ok)"></span>
+        <span style="height:${h.debug / max * 150}px;background:var(--dbg)"></span></div>`).join('')}</div>
+      <div class="histx">${hours.map(h => `<span>${multiDay ? h.k.slice(8, 10) + '/' : ''}${h.k.slice(11, 13)}h</span>`).join('')}</div>
+    </div>
+    <div class="cards">
+      <div class="card" style="grid-column:1/-1"><h3>Erros agrupados por mensagem <span class="muted" style="font-weight:normal">(números e GUIDs normalizados; clique para filtrar)</span></h3>
+        ${errs.length ? `<table><colgroup><col style="width:60px"><col style="width:70px"><col style="width:90px"><col style="width:130px"><col></colgroup>
+        <thead><tr><th class="num">Logs</th><th class="num">Eventos</th><th>Integração</th><th>Tipo</th><th>Mensagem</th></tr></thead><tbody>
+        ${errs.map(r => `<tr><td class="num erro-txt">${nf.format(r.n)}</td><td class="num">${nf.format(r.ev.size)}</td><td>${esc(r.integ)}</td><td>${esc(r.tipo)}</td>
+          <td class="click" data-tpl="${esc(r.tpl)}" title="Exemplo: ${esc(r.ex.msg.slice(0, 400))}">${esc(r.tpl)}</td></tr>`).join('')}
+        </tbody></table>` : '<div class="muted">Nenhum erro 🎉</div>'}</div>
+      <div class="card"><h3>Por integração</h3>${tbl(byKey(e => e.integs), 'integ')}</div>
+      <div class="card"><h3>Por tipo</h3>${tbl(byKey(e => e.tipos), 'tipo')}</div>
+    </div>`;
+}
+
+/* ---------- Exportação ---------- */
+function exportCSV(){
+  const cols = ['Id', 'IdentificadorUnico', 'PayloadProcessamento', 'Tipo', 'Mensagem', 'DataCriacao', 'Severidade', 'Status', 'TipoIntegracao', 'NivelEfetivo'];
+  const q = v => /[;"\n\r]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+  const lines = [cols.join(';')];
+  for (const L of S.fLogs) lines.push([L.id, L.ident, L.payload, L.tipo, L.msg, L.dt, L.sev, L.status, L.integ, L.lvl].map(q).join(';'));
+  const blob = new Blob(['﻿' + lines.join('\r\n')], {type: 'text/csv;charset=utf-8'});
+  const a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'logs-filtrados.csv'; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+}
+
+/* ---------- Carga ---------- */
+async function loadFile(file){
+  $('#loading').style.display = 'flex';
+  await new Promise(r => setTimeout(r, 30));
+  try {
+    const t0 = performance.now();
+    const text = await file.text();
+    const rows = parseCSV(text);
+    const head = rows.shift().map(h => h.trim());
+    const logs = new Array(rows.length); let k = 0;
+    for (const r of rows){
+      if (r.length < 2) continue;
+      const o = {}; for (let i = 0; i < head.length; i++) o[head[i]] = r[i];
+      logs[k] = enrich(o, k); k++;
+    }
+    logs.length = k;
+    S.logs = logs;
+    S.integs = [...new Set(logs.map(l => l.integ))].sort();
+    S.tipos = [...new Set(logs.map(l => l.tipo))].sort();
+    $('#fInteg').innerHTML = '<option value="">Integração: todas</option>' + S.integs.map(v => `<option>${esc(v)}</option>`).join('');
+    $('#fTipo').innerHTML = '<option value="">Tipo: todos</option>' + S.tipos.map(v => `<option>${esc(v)}</option>`).join('');
+    buildEvents();
+    S.selEv = null; S.selLog = null;
+    const ts = logs.map(l => l.dt).filter(Boolean).sort();
+    $('#fileInfo').textContent = `${file.name} · ${nf.format(k)} logs · ${ts[0]?.slice(0, 16)} → ${ts[ts.length - 1]?.slice(0, 16)} · ${Math.round(performance.now() - t0)} ms`;
+    $('#drop').style.display = 'none';
+    $('#filters').hidden = false;
+    showTab(S.tab);
+    applyFilters();
+    renderEventDetail(); renderLogDetail();
+  } catch (err){
+    alert('Erro ao ler o arquivo: ' + err.message);
+    console.error(err);
+  } finally { $('#loading').style.display = 'none'; }
+}
+
+/* ---------- Eventos de UI ---------- */
+function showTab(t){
+  S.tab = t;
+  $$('.tabs button').forEach(b => b.classList.toggle('on', b.dataset.tab === t));
+  if (!S.logs.length) return;
+  $$('.view').forEach(v => v.classList.toggle('on', v.id === 'v-' + t));
+  render();
+}
+function setFilter(patch, tab){
+  Object.assign(S.f, patch);
+  syncInputs();
+  if (tab) showTab(tab);
+  applyFilters();
+}
+function syncInputs(){
+  $('#q').value = S.f.q; $('#qPayload').checked = S.f.payload;
+  $('#fInteg').value = S.f.integ; $('#fTipo').value = S.f.tipo;
+  $('#fFrom').value = S.f.from || ''; $('#fTo').value = S.f.to || '';
+  $$('.chip[data-st]').forEach(c => c.classList.toggle('off', !S.f.st[c.dataset.st]));
+}
+
+$('#btnOpen').onclick = () => $('#file').click();
+$('#file').onchange = e => e.target.files[0] && loadFile(e.target.files[0]);
+['dragover', 'dragenter'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('#drop').classList.add('over'); }));
+['dragleave', 'drop'].forEach(ev => document.addEventListener(ev, e => { e.preventDefault(); $('#drop').classList.remove('over'); }));
+document.addEventListener('drop', e => { const f = e.dataTransfer.files[0]; if (f) loadFile(f); });
+
+$$('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
+let deb;
+$('#q').oninput = e => { clearTimeout(deb); deb = setTimeout(() => setFilter({q: e.target.value}), 300); };
+$('#qPayload').onchange = e => setFilter({payload: e.target.checked});
+$('#fInteg').onchange = e => setFilter({integ: e.target.value});
+$('#fTipo').onchange = e => setFilter({tipo: e.target.value});
+$('#fFrom').onchange = e => setFilter({from: e.target.value || null});
+$('#fTo').onchange = e => setFilter({to: e.target.value || null});
+$('#sort').onchange = e => { S.sort = e.target.value; applyFilters(); };
+$$('.chip[data-st]').forEach(c => c.onclick = ev => {
+  const k = c.dataset.st;
+  if (ev.ctrlKey || ev.metaKey){ for (const s in S.f.st) S.f.st[s] = s === k; } // ctrl+clique = somente este
+  else S.f.st[k] = !S.f.st[k];
+  syncInputs(); applyFilters();
+});
+$('#btnClear').onclick = () => { clearSelection(); setFilter({q: '', payload: false, integ: '', tipo: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null, tpl: '', ident: ''}); };
+document.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.target.closest('input,select,textarea')) clearSelection(); });
+$('#gap').onchange = () => { if (!S.logs.length) return; buildEvents(); S.selEv = null; renderEventDetail(); applyFilters(); };
+$('#tags').onclick = e => { const k = e.target.dataset.rm; if (k) setFilter({[k]: ''}); };
+
+$('#evList').onclick = e => {
+  if (e.target.dataset.more){ S.evShown += PAGE; renderEvents(); return; }
+  const tr = e.target.closest('tr[data-ev]'); if (!tr) return;
+  S.selEv = S.events[+tr.dataset.ev];
+  $$('#evList tr.sel').forEach(r => r.classList.remove('sel')); tr.classList.add('sel');
+  renderEventDetail(); $('#evDetail').scrollTop = 0;
+};
+$('#logList').onclick = e => {
+  if (e.target.dataset.more){ S.logShown += PAGE; renderLogs(); return; }
+  if (e.target.id === 'btnExport'){ exportCSV(); return; }
+  const tr = e.target.closest('tr[data-log]'); if (!tr) return;
+  S.selLog = S.logs[+tr.dataset.log];
+  $$('#logList tr.sel').forEach(r => r.classList.remove('sel')); tr.classList.add('sel');
+  renderLogDetail();
+};
+$('#evDetail').addEventListener('toggle', e => { if (e.target.tagName === 'DETAILS' && e.target.open) fillDetails(e.target); }, true);
+
+function onDetailClick(e){
+  const t = e.target;
+  if (t.dataset.copy){ navigator.clipboard.writeText(prettyPayload(S.logs[+t.dataset.copy].payload)); t.textContent = 'copiado!'; setTimeout(() => t.textContent = 'copiar', 1200); return; }
+  if (t.id === 'hideDebug'){ S.hideDebug = t.checked; renderEventDetail(); return; }
+  const a = t.dataset.act; if (!a) return;
+  if (a === 'close'){ clearSelection(); return; }
+  const ev = S.selEv, L = S.selLog;
+  if (a === 'identEv') setFilter({ident: ev.ident, q: '', tpl: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null}, 'eventos');
+  if (a === 'identLog') setFilter({ident: ev.ident, q: '', tpl: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null}, 'logs');
+  if (a === 'copyIdent'){ navigator.clipboard.writeText(ev.ident); t.textContent = 'copiado!'; }
+  if (a === 'identLog2') setFilter({ident: L.ident, q: '', tpl: ''}, 'logs');
+  if (a === 'openEv'){ S.selEv = L.ev; showTab('eventos'); renderEventDetail(); }
+}
+$('#evDetail').onclick = onDetailClick;
+$('#logDetail').onclick = onDetailClick;
+
+$('#summary').onclick = e => {
+  const t = e.target.closest('[data-set],[data-tpl],[data-hour]'); if (!t) return;
+  if (t.dataset.tpl){ setFilter({tpl: t.dataset.tpl}, 'eventos'); return; }
+  if (t.dataset.hour){ const h = t.dataset.hour.replace(' ', 'T'); setFilter({from: h + ':00:00', to: h + ':59:59'}, 'eventos'); return; }
+  const patch = {[t.dataset.set]: t.dataset.v};
+  if (t.dataset.only) patch.st = {erro: true, sucesso: false, debug: false};
+  setFilter(patch, 'eventos');
+};
+/* ---------- Divisor redimensionável ---------- */
+function setDetailWidth(px){
+  $$('.detail').forEach(d => d.style.width = px ? px + 'px' : '');
+  try { px ? localStorage.setItem('detailWidth', px) : localStorage.removeItem('detailWidth'); } catch {}
+}
+try { const w = +localStorage.getItem('detailWidth'); if (w) setDetailWidth(w); } catch {}
+$$('.splitter').forEach(sp => {
+  sp.addEventListener('pointerdown', e => {
+    e.preventDefault();
+    const view = sp.parentElement, rect = view.getBoundingClientRect();
+    sp.setPointerCapture(e.pointerId); sp.classList.add('drag'); document.body.classList.add('resizing');
+    const move = ev => {
+      const w = Math.round(rect.right - ev.clientX);
+      setDetailWidth(Math.max(280, Math.min(w, rect.width - 250)));
+    };
+    const up = () => {
+      sp.classList.remove('drag'); document.body.classList.remove('resizing');
+      sp.removeEventListener('pointermove', move); sp.removeEventListener('pointerup', up);
+    };
+    sp.addEventListener('pointermove', move); sp.addEventListener('pointerup', up);
+  });
+  sp.addEventListener('dblclick', () => setDetailWidth(0));
+});
+
+syncInputs();
+</script>
+</body>
+</html>
