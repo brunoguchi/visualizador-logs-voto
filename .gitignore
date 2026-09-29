@@ -1,0 +1,2 @@
+# CSVs exportados contêm dados reais (clientes, limites, payloads): nunca versionar
+*.csv
