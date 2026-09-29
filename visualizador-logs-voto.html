@@ -8,13 +8,13 @@
 :root{
   --bg:#f6f7f9; --panel:#fff; --text:#1d2330; --muted:#6b7280; --line:#e3e6eb; --hover:#f0f3f8; --sel:#e3ecfb;
   --accent:#2563eb; --erro:#dc2626; --erro-bg:#fde8e8; --ok:#15803d; --ok-bg:#e3f5e8; --dbg:#8a94a6; --dbg-bg:#eef0f4;
-  --code:#f3f4f6; --warn:#b45309;
+  --code:#f3f4f6; --warn:#b45309; --mark:#fde68a;
 }
 @media (prefers-color-scheme: dark){
   :root{
     --bg:#12151b; --panel:#1a1e26; --text:#e3e7ee; --muted:#9099a8; --line:#2b313c; --hover:#222834; --sel:#1f3050;
     --accent:#6ea0ff; --erro:#f87171; --erro-bg:#3b1d1f; --ok:#4ade80; --ok-bg:#16301f; --dbg:#8a94a6; --dbg-bg:#262b35;
-    --code:#11141a; --warn:#fbbf24;
+    --code:#11141a; --warn:#fbbf24; --mark:#6b5a12;
   }
 }
 *{box-sizing:border-box}
@@ -100,6 +100,18 @@ pre.payload{background:var(--code);border:1px solid var(--line);border-radius:6p
 .histx span{flex:1;text-align:center;overflow:hidden}
 .empty{padding:30px;text-align:center;color:var(--muted)}
 #loading{position:fixed;inset:0;background:rgba(0,0,0,.35);display:none;align-items:center;justify-content:center;z-index:10;color:#fff;font-size:16px}
+#loading .box{background:var(--panel);color:var(--text);border-radius:10px;padding:16px 22px;min-width:300px;box-shadow:0 8px 30px rgba(0,0,0,.3)}
+#loading .prog{height:6px;background:var(--line);border-radius:3px;margin-top:10px;overflow:hidden}
+#loading .prog i{display:block;height:100%;width:0;background:var(--accent);transition:width .15s}
+mark{background:var(--mark);color:inherit;border-radius:2px;padding:0 1px}
+input.bad{border-color:var(--erro);outline-color:var(--erro)}
+.hint{font-size:11px;color:var(--muted);margin:6px 0 10px}
+.note{background:var(--sel);border-radius:6px;padding:6px 10px;margin:0 0 10px;font-size:12px}
+th.sort{cursor:pointer;user-select:none} th.sort:hover{color:var(--text)}
+dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:10px;padding:16px;width:min(520px,92vw)}
+dialog::backdrop{background:rgba(0,0,0,.35)}
+dialog textarea{width:100%;height:180px;background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:6px;padding:6px;font:12px ui-monospace,Consolas,monospace}
+dialog .row{display:flex;gap:8px;justify-content:flex-end;margin-top:10px}
 @media (max-width:900px){.detail{width:100% !important;min-width:0;border-left:none}.splitter{display:none}.view.on{flex-direction:column}.filters input[type=search]{width:100%}}
 </style>
 </head>
@@ -114,12 +126,16 @@ pre.payload{background:var(--code);border:1px solid var(--line);border-radius:6p
   <div class="tabs">
     <button data-tab="eventos" class="on">Eventos</button>
     <button data-tab="logs">Logs</button>
+    <button data-tab="endpoints">Endpoints</button>
     <button data-tab="resumo">Resumo</button>
   </div>
 </header>
 <div class="filters" id="filters" hidden>
-  <input type="search" id="q" placeholder="Buscar identificador ou mensagem…">
+  <input type="search" id="q" placeholder="Buscar… ex: erro ident:1050948 -debug tipo:sap payload:kunnr /regex/"
+    title="Termos separados por espaço (E). &quot;frase exata&quot;; -termo exclui; /regex/; campos: ident: tipo: integ: msg: payload: url: ep: status: http:&#10;Na aba Eventos, cada termo precisa aparecer em algum log do evento; -termo exclui o evento se algum log casar.">
   <label><input type="checkbox" id="qPayload"> buscar no payload</label>
+  <button id="btnList" title="Colar uma lista de identificadores (um por linha, vírgula ou espaço)">Lista de IDs…</button>
+  <label class="muted" title="Eventos com Request sem Response/Erro correspondente"><input type="checkbox" id="fPend"> só com chamada sem resposta</label>
   <select id="fInteg"><option value="">Integração: todas</option></select>
   <select id="fTipo"><option value="">Tipo: todos</option></select>
   <span class="chip" data-st="erro"><span class="dot erro"></span>Erro</span>
@@ -153,11 +169,123 @@ pre.payload{background:var(--code);border:1px solid var(--line);border-radius:6p
     <div class="splitter" title="Arraste para redimensionar (duplo clique restaura)"></div>
     <div class="detail" id="logDetail"><div class="empty">Selecione um log</div></div>
   </section>
+  <section class="view" id="v-endpoints">
+    <div class="summary" id="endpoints"></div>
+  </section>
   <section class="view" id="v-resumo">
     <div class="summary" id="summary"></div>
   </section>
 </main>
-<div id="loading">Processando…</div>
+<div id="loading"><div class="box"><div id="loadTxt">Processando…</div><div class="prog"><i id="loadBar"></i></div></div></div>
+<dialog id="dlgList">
+  <b>Lista de identificadores</b>
+  <p class="muted" style="margin:6px 0">Cole os identificadores (um por linha, ou separados por vírgula, ponto e vírgula ou espaço). A busca é exata e ignora maiúsculas.</p>
+  <textarea id="listTxt" spellcheck="false"></textarea>
+  <div class="row"><button id="listClear">Remover lista</button><button id="listCancel">Cancelar</button><button class="primary" id="listOk">Aplicar</button></div>
+</dialog>
+
+<!-- Parse do CSV: roda num Web Worker (criado a partir deste texto) para não travar a página -->
+<script id="wk" type="text/plain">
+const reReq = /^(Request|Response) ([A-Z]+(?: [A-Z]+)*) para (.+)$/s;
+const reErrReq = /^Erro na requisi\S* ([A-Z]+(?: [A-Z]+)*) para (.+?)\.? StatusCode: (\d+)/s;
+const reGuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+const BATCH = 4000;
+const tick = () => new Promise(r => setTimeout(r, 0));
+
+function parseTs(s){
+  // "2026-09-26 00:39:10.9929693" -> ms (hora local); as 4 casas seguintes ficam em sub
+  const d = new Date(s.slice(0, 23).replace(' ', 'T'));
+  return isNaN(d) ? 0 : d.getTime();
+}
+function template(m){
+  return m.replace(reGuid, '{guid}').replace(/https?:\/\/[^\s?]+\?[^]*?(?=\. StatusCode|$)/, u => u.split('?')[0] + '?…')
+          .replace(/(\brequest\s+)\{[^]*?\}(?=\s+response\b|\s*$)/i, '$1{…}')
+          .replace(/\d+/g, '#').slice(0, 220);
+}
+// endpoint sem query, com GUIDs, datas e números longos normalizados
+function epKey(method, url){
+  const u = url.split(' ')[0].split('?')[0].replace(/^https?:\/\//i, '').replace(/\.$/, '');
+  const k = u.indexOf('/');   // o host fica como está; só o caminho é normalizado
+  const path = (k < 0 ? '' : u.slice(k)).replace(reGuid, '{guid}').replace(/\d{4}-\d{2}-\d{2}/g, '{data}').replace(/\d{3,}/g, '{n}');
+  return method + ' ' + (k < 0 ? u : u.slice(0, k)) + path;
+}
+function enrich(r, c, idx){
+  const g = k => (c[k] != null ? r[c[k]] : '') || '';
+  const pl = g('PayloadProcessamento');
+  const L = {
+    idx, id: g('Id'), ident: g('IdentificadorUnico'), payload: pl === 'NULL' ? '' : pl, tipo: g('Tipo'),
+    msg: g('Mensagem'), dt: g('DataCriacao'), sev: g('Severidade'), status: g('Status'), integ: g('TipoIntegracao'),
+  };
+  L.ts = parseTs(L.dt);
+  L.sub = +(L.dt.slice(23, 27).padEnd(4, '0')) || 0;   // décimos de microssegundo após o ms (desempate)
+  L.urlId = /^https?:\/\//i.test(L.ident);
+  const m = L.msg;
+  let mm;
+  if ((mm = reReq.exec(m))){
+    L.kind = mm[1] === 'Request' ? 'req' : 'resp';
+    L.method = mm[2];
+    L.url = mm[3].replace(/ \(payload omitido[^)]*\)\s*$/, '');
+    L.key = L.method + ' ' + L.url;
+  } else if ((mm = reErrReq.exec(m))){
+    L.kind = 'reqerr'; L.method = mm[1]; L.url = mm[2]; L.key = L.method + ' ' + L.url; L.http = +mm[3];
+  }
+  if (L.key) L.ep = epKey(L.method, L.url);
+  const isErr = /erro/i.test(L.status) || /erro/i.test(L.sev) || /^erro\b/i.test(m) || (L.http >= 400);
+  L.lvl = isErr ? 'erro' : (/sucesso/i.test(L.status) ? 'sucesso' : 'debug');
+  if (L.lvl === 'erro') L.tpl = template(m);
+  return L;
+}
+
+self.onmessage = async e => {
+  try {
+    const file = e.data;
+    postMessage({t: 'st', msg: 'Lendo arquivo…', p: 0});
+    let t = await file.text();
+    const n = t.length;
+    let i = t.charCodeAt(0) === 0xFEFF ? 1 : 0;
+    const nl = t.indexOf('\n', i);
+    const head = t.slice(i, nl < 0 ? n : nl);
+    const D = (head.split(';').length >= head.split(',').length) ? 59 : 44;
+    let row = [], cols = null, idx = 0, buf = [];
+    const flush = async () => {
+      postMessage({t: 'batch', logs: buf, p: i / n, msg: 'Interpretando logs…'}); buf = [];
+      await tick();
+    };
+    while (i < n){
+      let val;
+      if (t.charCodeAt(i) === 34){
+        let j = i + 1; const s = j;
+        for(;;){
+          const q = t.indexOf('"', j);
+          if (q < 0){ val = t.slice(s); i = n; break; }
+          if (t.charCodeAt(q + 1) === 34){ j = q + 2; continue; }
+          val = t.slice(s, q); i = q + 1; break;
+        }
+        if (val.indexOf('""') >= 0) val = val.replace(/""/g, '"');
+      } else {
+        let j = i;
+        while (j < n){ const c = t.charCodeAt(j); if (c === D || c === 10 || c === 13) break; j++; }
+        val = t.slice(i, j); i = j;
+      }
+      row.push(val);
+      const c = t.charCodeAt(i);
+      if (c === D) i++;
+      else {
+        if (c === 13) i++; if (t.charCodeAt(i) === 10) i++;
+        if (!cols){ cols = {}; row.forEach((h, k) => cols[h.trim()] = k); }
+        else if (row.length >= 2){ buf.push(enrich(row, cols, idx++)); if (buf.length >= BATCH) await flush(); }
+        row = [];
+      }
+    }
+    if (row.length && cols && row.length >= 2) buf.push(enrich(row, cols, idx++));
+    t = null;
+    if (buf.length) await flush();
+    postMessage({t: 'done', n: idx, cols: cols ? Object.keys(cols) : []});
+  } catch (err){
+    postMessage({t: 'err', msg: String(err && err.message || err)});
+  }
+};
+</script>
 
 <script>
 'use strict';
@@ -171,118 +299,149 @@ const TRUNC = 65535; // limite comum de export de NVARCHAR
 const S = {
   logs: [], events: [], fEvents: [], fLogs: [],
   integs: [], tipos: [],
-  f: {q:'', payload:false, integ:'', tipo:'', st:{erro:true, sucesso:true, debug:true}, from:null, to:null, tpl:'', ident:''},
-  sort: 'start_desc', tab: 'eventos', evShown: PAGE, logShown: PAGE, selEv: null, selLog: null, hideDebug: false
+  f: {q:'', payload:false, integ:'', tipo:'', st:{erro:true, sucesso:true, debug:true}, from:null, to:null, tpl:'', ident:'', ep:'', pend:false, idents:null},
+  sort: 'start_desc', tab: 'eventos', evShown: PAGE, logShown: PAGE, selEv: null, selLog: null, hideDebug: false,
+  hl: null, identSet: new Set(), identsMiss: [], epSort: {k: 'p95', dir: -1}
 };
+const FILTERS0 = () => ({q:'', payload:false, integ:'', tipo:'', st:{erro:true, sucesso:true, debug:true}, from:null, to:null, tpl:'', ident:'', ep:'', pend:false, idents:null});
 
-/* ---------- CSV ---------- */
-function parseCSV(t){
-  const out = []; let i = 0; const n = t.length;
-  if (t.charCodeAt(0) === 0xFEFF) i = 1;
-  const nl = t.indexOf('\n', i);
-  const head = t.slice(i, nl < 0 ? n : nl);
-  const D = (head.split(';').length >= head.split(',').length) ? 59 : 44;
-  let row = [];
-  while (i < n){
-    let val;
-    if (t.charCodeAt(i) === 34){
-      let j = i + 1; const s = j;
-      for(;;){
-        const q = t.indexOf('"', j);
-        if (q < 0){ val = t.slice(s); i = n; break; }
-        if (t.charCodeAt(q + 1) === 34){ j = q + 2; continue; }
-        val = t.slice(s, q); i = q + 1; break;
-      }
-      if (val.indexOf('""') >= 0) val = val.replace(/""/g, '"');
-    } else {
-      let j = i;
-      while (j < n){ const c = t.charCodeAt(j); if (c === D || c === 10 || c === 13) break; j++; }
-      val = t.slice(i, j); i = j;
-    }
-    row.push(val);
-    const c = t.charCodeAt(i);
-    if (c === D) i++;
-    else { if (c === 13) i++; if (t.charCodeAt(i) === 10) i++; out.push(row); row = []; }
-  }
-  if (row.length) out.push(row);
-  return out;
-}
-
-/* ---------- Enriquecimento ---------- */
-const reReq = /^(Request|Response) ([A-Z]+(?: [A-Z]+)*) para (.+)$/s;
-const reErrReq = /^Erro na requisi\S* ([A-Z]+(?: [A-Z]+)*) para (.+?)\.? StatusCode: (\d+)/s;
-const reGuid = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-
-function parseTs(s){
-  // "2026-09-26 00:39:10.9929693" -> hora local
-  const d = new Date(s.slice(0, 23).replace(' ', 'T'));
-  return isNaN(d) ? 0 : d.getTime();
-}
-function template(m){
-  return m.replace(reGuid, '{guid}').replace(/https?:\/\/[^\s?]+\?[^]*?(?=\. StatusCode|$)/, u => u.split('?')[0] + '?…')
-          .replace(/(\brequest\s+)\{[^]*?\}(?=\s+response\b|\s*$)/i, '$1{…}')
-          .replace(/\d+/g, '#').slice(0, 220);
-}
-function enrich(r, idx){
-  const L = {
-    idx, id: r.Id || '', ident: r.IdentificadorUnico || '', payload: r.PayloadProcessamento || '', tipo: r.Tipo || '',
-    msg: r.Mensagem || '', dt: r.DataCriacao || '', sev: r.Severidade || '', status: r.Status || '', integ: r.TipoIntegracao || '',
-  };
-  L.ts = parseTs(L.dt);
-  const m = L.msg;
-  let mm;
-  if ((mm = reReq.exec(m))){
-    L.kind = mm[1] === 'Request' ? 'req' : 'resp';
-    L.method = mm[2];
-    L.url = mm[3].replace(/ \(payload omitido[^)]*\)\s*$/, '');
-    L.key = L.method + ' ' + L.url;
-  } else if ((mm = reErrReq.exec(m))){
-    L.kind = 'reqerr'; L.method = mm[1]; L.url = mm[2]; L.key = L.method + ' ' + L.url; L.http = +mm[3];
-  }
-  const isErr = /erro/i.test(L.status) || /erro/i.test(L.sev) || /^erro\b/i.test(m) || (L.http >= 400);
-  L.lvl = isErr ? 'erro' : (/sucesso/i.test(L.status) ? 'sucesso' : 'debug');
-  if (L.lvl === 'erro') L.tpl = template(m);
-  L.lm = (L.ident + '\u0001' + m).toLowerCase();
-  return L;
-}
+/* ---------- Helpers ---------- */
 function shortUrl(u){
   try { const x = new URL(u.split(' ')[0]); return x.host + x.pathname + (x.search ? '?…' : ''); } catch { return u; }
 }
+function urlTail(u){
+  try { const p = new URL(u.split(' ')[0]).pathname.split('/').filter(Boolean); return '…/' + p.slice(-2).join('/'); } catch { return u; }
+}
+const cmpT = (a, b) => a.ts - b.ts || a.sub - b.sub || a.idx - b.idx;   // ms, depois 0,1 µs, depois ordem do arquivo
+
+/* ---------- Busca com sintaxe ---------- */
+// campo -> propriedade do log
+const QF = {ident: 'ident', id: 'ident', tipo: 'tipo', integ: 'integ', integracao: 'integ', msg: 'msg', payload: 'payload', url: 'url', ep: 'ep', status: 'lvl', http: 'http'};
+const HLF = new Set([null, 'msg', 'payload', 'url']);   // campos cujo termo é destacado no texto
+function parseQuery(s){
+  const terms = []; let bad = false;
+  // tokens: -?campo:"frase" | -?campo:/regex com espaços/ (só se a barra final termina o token) | qualquer sequência sem espaço
+  for (let tok of (s.match(/-?(?:\w+:)?(?:"[^"]*"|\/(?:\\.|[^\/\\])+\/(?=\s|$))|\S+/g) || [])){
+    let neg = false, field = null;
+    if (tok.length > 1 && tok[0] === '-'){ neg = true; tok = tok.slice(1); }
+    const m = /^(\w+):([^]+)$/.exec(tok);
+    if (m && QF[m[1].toLowerCase()]){ field = QF[m[1].toLowerCase()]; tok = m[2]; }
+    let isRe = false;
+    if (tok.length > 2 && tok[0] === '/' && tok[tok.length - 1] === '/'){ isRe = true; tok = tok.slice(1, -1); }
+    else if (tok[0] === '"') tok = tok.replace(/^"|"$/g, '');
+    if (!tok) continue;
+    const lit = tok.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    let re;
+    try { re = new RegExp(isRe ? tok : lit, 'i'); } catch { bad = true; re = new RegExp(lit, 'i'); }
+    terms.push({neg, field, re});
+  }
+  let hl = null;
+  const src = terms.filter(t => !t.neg && HLF.has(t.field)).map(t => '(?:' + t.re.source + ')');
+  if (src.length){ try { hl = new RegExp(src.join('|'), 'gi'); } catch { hl = null; } }
+  return {terms, bad, hl};
+}
+function termHit(L, t, pl){
+  switch (t.field){
+    case null: return t.re.test(L.ident) || t.re.test(L.msg) || (pl && !!L.payload && t.re.test(L.payload));
+    case 'payload': return !!L.payload && t.re.test(L.payload);
+    case 'http': return L.http != null && t.re.test(String(L.http));
+    default: return t.re.test(L[t.field] || '');
+  }
+}
+function hlHtml(s){
+  s = String(s ?? '');
+  const re = S.hl; if (!re) return esc(s);
+  re.lastIndex = 0;
+  let out = '', last = 0, m, k = 0;
+  while ((m = re.exec(s))){
+    if (!m[0]){ re.lastIndex++; continue; }
+    out += esc(s.slice(last, m.index)) + '<mark>' + esc(m[0]) + '</mark>';
+    last = m.index + m[0].length;
+    if (++k > 500) break;
+  }
+  return out + esc(s.slice(last));
+}
+
+/* ---------- Copiar ---------- */
+async function copyText(txt){
+  try { await navigator.clipboard.writeText(txt); return true; } catch {}
+  const ta = document.createElement('textarea'); ta.value = txt; ta.style.position = 'fixed'; ta.style.opacity = 0;
+  document.body.appendChild(ta); ta.select();
+  let ok = false; try { ok = document.execCommand('copy'); } catch {}
+  ta.remove(); return ok;
+}
+function flash(btn, txt = 'copiado!'){ const o = btn.dataset.o || (btn.dataset.o = btn.textContent); btn.textContent = txt; setTimeout(() => btn.textContent = o, 1200); }
+function parsePayload(p){
+  if (!p) return null;
+  const t = p.trim();
+  if (t[0] === '{' || t[0] === '['){ try { return JSON.parse(t); } catch {} }
+  return p;
+}
+const logObj = L => ({hora: L.dt, tipo: L.tipo, integracao: L.integ, severidade: L.sev, status: L.status, mensagem: L.msg, payload: parsePayload(L.payload)});
+function eventJSON(e){
+  return JSON.stringify({identificador: e.ident, inicio: e.logs[0].dt, fim: e.logs[e.logs.length - 1].dt, duracaoMs: e.dur, situacao: e.st, logs: e.logs.map(logObj)}, null, 2);
+}
+function eventText(e){
+  const out = [`Evento ${e.ident}`, `Início ${e.logs[0].dt} · Fim ${e.logs[e.logs.length - 1].dt} · Duração ${fmtDur(e.dur)} · ${stLabel[e.st]}`,
+    `Integração: ${e.integTxt} · Tipos: ${e.tipoTxt}`, ''];
+  for (const L of e.logs){
+    out.push(`[${hms(L.dt)} +${fmtDur(L.ts - e.start)}] ${L.tipo} · ${L.msg}`);
+    if (L.payload) out.push('  Payload:', prettyPayload(L.payload).replace(/^/gm, '    '));
+  }
+  return out.join('\n');
+}
 
 /* ---------- Agrupamento em eventos ---------- */
+// Identificador comum: logs do mesmo id separados por mais que o intervalo viram eventos diferentes.
+// Identificador que é uma URL (PartnerHub, Core...): identifica o endpoint, não a operação; então cada
+// Request abre um evento próprio e a Response/Erro é ligada ao Request pendente (mesmo método e URL).
 function buildEvents(){
   const gap = Math.max(1, +$('#gap').value || 60) * 1000;
-  const order = S.logs.slice().sort((a, b) => a.ident < b.ident ? -1 : a.ident > b.ident ? 1 : a.ts - b.ts);
-  const evs = []; let cur = null;
+  const order = S.logs.slice().sort((a, b) => a.ident < b.ident ? -1 : a.ident > b.ident ? 1 : cmpT(a, b));
+  const evs = []; let cur = null, curIdent = null, pend = [];
+  const mk = L => { const e = {n: evs.length, ident: L.ident, urlId: L.urlId, start: L.ts, end: L.ts, logs: [], err: 0, ok: 0, integs: new Set(), tipos: new Set()}; evs.push(e); return e; };
   for (const L of order){
-    if (!cur || cur.ident !== L.ident || L.ts - cur.end > gap){
-      cur = {n: evs.length, ident: L.ident, start: L.ts, end: L.ts, logs: [], err: 0, ok: 0, integs: new Set(), tipos: new Set()};
-      evs.push(cur);
+    if (L.ident !== curIdent){ curIdent = L.ident; cur = null; pend = []; }
+    let e;
+    if (L.urlId){
+      if (L.kind === 'req'){ e = cur = mk(L); e.pk = L.key; pend.push(e); }
+      else {
+        if (L.kind === 'resp' || L.kind === 'reqerr'){
+          pend = pend.filter(p => L.ts - p.end <= gap);
+          const k = pend.findIndex(p => p.pk === L.key);
+          if (k >= 0) e = pend.splice(k, 1)[0];
+        }
+        if (!e) e = (cur && L.ts - cur.end <= gap) ? cur : (cur = mk(L));
+      }
+    } else {
+      if (!cur || L.ts - cur.end > gap) cur = mk(L);
+      e = cur;
     }
-    cur.logs.push(L); cur.end = L.ts; L.ev = cur;
-    cur.integs.add(L.integ); cur.tipos.add(L.tipo);
-    if (L.lvl === 'erro') cur.err++; else if (L.lvl === 'sucesso') cur.ok++;
+    e.logs.push(L); if (L.ts > e.end) e.end = L.ts; L.ev = e;
+    e.integs.add(L.integ); e.tipos.add(L.tipo);
+    if (L.lvl === 'erro') e.err++; else if (L.lvl === 'sucesso') e.ok++;
   }
   for (const e of evs){
     e.st = e.err ? 'erro' : e.ok ? 'sucesso' : 'debug';
     e.dur = e.end - e.start;
     const pick = e.logs.find(l => l.lvl === 'erro') || [...e.logs].reverse().find(l => l.lvl === 'sucesso') || e.logs[0];
     e.title = pick.msg;
+    if (e.urlId){ const rq = e.logs.find(l => l.kind === 'req' && l.payload); if (rq) e.hint = rq.payload.replace(/\s+/g, ' ').slice(0, 100); }
     e.integTxt = [...e.integs].join(', ');
     e.tipoTxt = [...e.tipos].join(', ');
     e.dt = e.logs[0].dt;
+    e.tl = timeline(e);
+    e.pend = e.tl.filter(i => i.req && !i.resp && !i.err).length;
   }
   S.events = evs;
 }
 
 /* ---------- Filtros ---------- */
-function logMatchText(L, q, payload){
-  if (L.lm.indexOf(q) >= 0) return true;
-  if (payload && L.payload){ if (L.lp === undefined) L.lp = L.payload.toLowerCase(); return L.lp.indexOf(q) >= 0; }
-  return false;
-}
 function applyFilters(){
-  const f = S.f, q = f.q.trim().toLowerCase();
+  const f = S.f;
+  const Q = parseQuery(f.q);
+  S.hl = Q.hl; $('#q').classList.toggle('bad', Q.bad);
+  const terms = Q.terms, pl = f.payload;
   const from = f.from ? new Date(f.from).getTime() : -Infinity;
   const to = f.to ? new Date(f.to).getTime() + 999 : Infinity;
 
@@ -290,10 +449,16 @@ function applyFilters(){
     if (!f.st[e.st]) return false;
     if (e.end < from || e.start > to) return false;
     if (f.ident && e.ident !== f.ident) return false;
+    if (f.idents && !f.idents.has(e.ident.toLowerCase())) return false;
     if (f.integ && !e.integs.has(f.integ)) return false;
     if (f.tipo && !e.tipos.has(f.tipo)) return false;
+    if (f.pend && !e.pend) return false;
     if (f.tpl && !e.logs.some(l => l.tpl === f.tpl)) return false;
-    if (q && !e.logs.some(l => logMatchText(l, q, f.payload))) return false;
+    if (f.ep && !e.logs.some(l => l.ep === f.ep)) return false;
+    for (const t of terms){
+      const hit = e.logs.some(l => termHit(l, t, pl));
+      if (t.neg ? hit : !hit) return false;
+    }
     return true;
   });
   const cmp = {
@@ -309,14 +474,17 @@ function applyFilters(){
     if (!f.st[L.lvl]) return false;
     if (L.ts < from || L.ts > to) return false;
     if (f.ident && L.ident !== f.ident) return false;
+    if (f.idents && !f.idents.has(L.ident.toLowerCase())) return false;
     if (f.integ && L.integ !== f.integ) return false;
     if (f.tipo && L.tipo !== f.tipo) return false;
     if (f.tpl && L.tpl !== f.tpl) return false;
-    if (q && !logMatchText(L, q, f.payload)) return false;
+    if (f.ep && L.ep !== f.ep) return false;
+    if (f.pend && !L.ev.pend) return false;
+    for (const t of terms) if (termHit(L, t, pl) === t.neg) return false;
     return true;
   });
   const asc = S.sort === 'start_asc';
-  S.fLogs.sort((a, b) => asc ? a.ts - b.ts : b.ts - a.ts);
+  S.fLogs.sort((a, b) => asc ? cmpT(a, b) : cmpT(b, a));
 
   S.evShown = PAGE; S.logShown = PAGE;
   // item selecionado que saiu da lista filtrada não fica preso no painel de detalhe
@@ -332,6 +500,11 @@ function clearSelection(){
 function renderTags(){
   const t = [];
   if (S.f.ident) t.push(`<span class="chip tag">Identificador = ${esc(S.f.ident)} <b data-rm="ident">✕</b></span>`);
+  if (S.f.ep) t.push(`<span class="chip tag" title="${esc(S.f.ep)}">Endpoint: ${esc(S.f.ep.slice(0, 60))} <b data-rm="ep">✕</b></span>`);
+  if (S.f.idents){
+    const miss = S.identsMiss.length;
+    t.push(`<span class="chip tag" title="${miss ? 'Sem resultado: ' + esc(S.identsMiss.join(', ')) : 'Todos encontrados'}">Lista: ${nf.format(S.f.idents.size)} ids${miss ? ` (<span class="erro-txt">${miss} sem resultado</span>)` : ''} <b data-rm="idents">✕</b></span>`);
+  }
   if (S.f.tpl) t.push(`<span class="chip tag" title="${esc(S.f.tpl)}">Erro: ${esc(S.f.tpl.slice(0, 60))}… <b data-rm="tpl">✕</b></span>`);
   $('#tags').innerHTML = t.join(' ');
 }
@@ -353,6 +526,7 @@ function render(){
     : `${nf.format(S.fEvents.length)} eventos`;
   if (S.tab === 'eventos') renderEvents();
   else if (S.tab === 'logs') renderLogs();
+  else if (S.tab === 'endpoints') renderEndpoints();
   else renderSummary();
 }
 
@@ -364,12 +538,12 @@ function renderEvents(){
       <td><span class="dot ${e.st}" title="${stLabel[e.st]}"></span></td>
       <td class="mono">${esc(hms(e.dt))}</td>
       <td class="num mono">${fmtDur(e.dur)}</td>
-      <td class="mono" title="${esc(e.ident)}">${esc(e.ident)}</td>
+      <td class="mono" title="${esc(e.ident)}">${esc(e.urlId ? urlTail(e.ident) : e.ident)}</td>
       <td title="${esc(e.integTxt)}">${esc(e.integTxt)}</td>
       <td title="${esc(e.tipoTxt)}">${esc(e.tipoTxt)}</td>
       <td class="num">${e.logs.length}</td>
       <td class="num ${e.err ? 'erro-txt' : ''}">${e.err || ''}</td>
-      <td title="${esc(e.title)}" class="${e.st === 'erro' ? 'erro-txt' : ''}">${esc(e.title)}</td>
+      <td title="${esc(e.title + (e.hint ? ' · ' + e.hint : ''))}">${e.hint ? `<span class="mono">${hlHtml(e.hint)}</span> <span class="muted">·</span> ` : ''}<span class="${e.st === 'erro' ? 'erro-txt' : ''}">${hlHtml(e.title.slice(0, 300))}</span>${e.pend ? ' <span class="warn">⚠ sem resposta</span>' : ''}</td>
     </tr>`).join('');
   $('#evList').innerHTML = `<table>
     <colgroup><col style="width:26px"><col style="width:96px"><col style="width:80px"><col style="width:150px"><col style="width:90px"><col style="width:150px"><col style="width:48px"><col style="width:44px"><col></colgroup>
@@ -388,7 +562,7 @@ function renderLogs(){
       <td class="mono" title="${esc(L.ident)}">${esc(L.ident)}</td>
       <td>${esc(L.integ)}</td>
       <td>${esc(L.tipo)}</td>
-      <td class="${L.lvl === 'erro' ? 'erro-txt' : ''}" title="${esc(L.msg.slice(0, 500))}">${esc(L.msg.slice(0, 400))}</td>
+      <td class="${L.lvl === 'erro' ? 'erro-txt' : ''}" title="${esc(L.msg.slice(0, 500))}">${hlHtml(L.msg.slice(0, 400))}</td>
       <td class="num muted">${L.payload ? nf.format(L.payload.length) : ''}</td>
     </tr>`).join('');
   $('#logList').innerHTML = `<table>
@@ -415,14 +589,14 @@ function payloadBlock(label, L){
   return `<div class="plabel">${label} ${tr} <button data-copy="${L.idx}">copiar</button></div><pre class="payload" data-pl="${L.idx}"></pre>`;
 }
 function logBody(L){
-  return `<div class="full mono">${esc(L.msg)}</div>
+  return `<div class="full mono">${hlHtml(L.msg)}</div>
     <div class="muted" style="font-size:11px;margin-bottom:4px">${esc(L.dt)} · ${esc(L.integ)} · ${esc(L.tipo)} · Severidade: ${esc(L.sev)} · Status: ${esc(L.status)} · Id: ${esc(L.id)}</div>
     ${payloadBlock('Payload', L)}`;
 }
 
 /* Linha do tempo do evento, juntando Request + Response/Erro com o mesmo método e URL */
 function timeline(e){
-  const items = []; const pending = new Map(); const used = new Set();
+  const items = []; const pending = new Map();
   for (const L of e.logs){
     if (L.kind === 'req'){
       const it = {req: L, t: L.ts}; items.push(it);
@@ -431,7 +605,6 @@ function timeline(e){
     } else if ((L.kind === 'resp' || L.kind === 'reqerr') && pending.get(L.key)?.length){
       const it = pending.get(L.key).shift();
       if (L.kind === 'resp') it.resp = L; else it.err = L;
-      used.add(L);
     } else items.push({log: L, t: L.ts});
   }
   return items;
@@ -439,7 +612,7 @@ function timeline(e){
 function renderEventDetail(){
   const e = S.selEv, box = $('#evDetail');
   if (!e){ box.innerHTML = '<div class="empty">Selecione um evento</div>'; return; }
-  const items = timeline(e);
+  const items = e.tl;
   const html = items.map(it => {
     if (it.req){
       const end = it.err || it.resp;
@@ -457,7 +630,7 @@ function renderEventDetail(){
     if (S.hideDebug && L.lvl === 'debug') return '';
     return `<details data-one="${L.idx}">
       <summary><span class="dot ${L.lvl}"></span><span class="t">${esc(hms(L.dt))} +${fmtDur(L.ts - e.start)}</span>
-        <span class="msg ${L.lvl === 'erro' ? 'erro-txt' : ''}">${esc(L.msg.slice(0, 300))}</span><span class="tp">${esc(L.tipo)}</span></summary>
+        <span class="msg ${L.lvl === 'erro' ? 'erro-txt' : ''}">${hlHtml(L.msg.slice(0, 300))}</span><span class="tp">${esc(L.tipo)}</span></summary>
       <div class="body"></div></details>`;
   }).join('');
   const nReq = items.filter(i => i.req).length;
@@ -475,7 +648,11 @@ function renderEventDetail(){
       <div>Integração</div><div>${esc(e.integTxt)}</div>
       <div>Tipos</div><div>${esc(e.tipoTxt)}</div>
     </div>
+    ${e.urlId ? '<div class="note">O identificador deste evento é uma URL (identifica o endpoint, não a operação). Cada Request abre um evento próprio e a Response/Erro é ligada ao Request pendente com o mesmo método e URL.</div>' : ''}
+    ${e.pend ? `<div class="note warn">⚠ ${e.pend} chamada(s) sem Response/Erro registrado neste evento.</div>` : ''}
     <div class="actions">
+      <button data-act="copyEvText">Copiar evento (texto)</button>
+      <button data-act="copyEvJson">Copiar evento (JSON)</button>
       <button data-act="identEv">Todos os eventos deste identificador</button>
       <button data-act="identLog">Todos os logs deste identificador</button>
       <button data-act="copyIdent">Copiar identificador</button>
@@ -491,7 +668,7 @@ function fillDetails(det){
     body.innerHTML = logBody(S.logs[+det.dataset.one]);
   } else {
     const req = S.logs[+det.dataset.pair];
-    const it = timeline(req.ev).find(i => i.req === req);
+    const it = req.ev.tl.find(i => i.req === req);
     let h = `<div class="full mono">${esc(req.method)} ${esc(req.url)}</div>
       <div class="muted" style="font-size:11px;margin-bottom:4px">${esc(req.integ)} · ${esc(req.tipo)}</div>`;
     h += payloadBlock('Request · ' + esc(hms(req.dt)), req);
@@ -500,15 +677,16 @@ function fillDetails(det){
     if (!it.resp && !it.err) h += '<div class="warn">Nenhuma resposta registrada para esta requisição neste evento.</div>';
     body.innerHTML = h;
   }
-  body.querySelectorAll('pre[data-pl]').forEach(p => p.textContent = prettyPayload(S.logs[+p.dataset.pl].payload));
+  fillPayloads(body);
 }
+function fillPayloads(root){ root.querySelectorAll('pre[data-pl]').forEach(p => p.innerHTML = hlHtml(prettyPayload(S.logs[+p.dataset.pl].payload))); }
 function renderLogDetail(){
   const L = S.selLog, box = $('#logDetail');
   if (!L){ box.innerHTML = '<div class="empty">Selecione um log</div>'; return; }
   box.innerHTML = `<div style="display:flex;gap:8px;align-items:center;margin-bottom:8px"><span class="badge ${L.lvl}">${stLabel[L.lvl]}</span><b class="mono">${esc(L.ident)}</b><button data-act="close" title="Fechar (Esc)" style="margin-left:auto">✕</button></div>
-    <div class="actions"><button data-act="openEv">Abrir evento deste log</button><button data-act="identLog2">Todos os logs deste identificador</button></div>
+    <div class="actions"><button data-act="openEv">Abrir evento deste log</button><button data-act="identLog2">Todos os logs deste identificador</button><button data-act="copyLog">Copiar log (JSON)</button></div>
     ${logBody(L)}`;
-  box.querySelectorAll('pre[data-pl]').forEach(p => p.textContent = prettyPayload(S.logs[+p.dataset.pl].payload));
+  fillPayloads(box);
 }
 
 /* ---------- Resumo ---------- */
@@ -575,6 +753,68 @@ function renderSummary(){
     </div>`;
 }
 
+/* ---------- Endpoints: latência e falhas ---------- */
+function pct(a, q){ return a[Math.min(a.length - 1, Math.ceil(q * a.length) - 1)]; }
+function collectEndpoints(){
+  const m = new Map(), calls = [];
+  const get = (ep, integ) => { let r = m.get(ep); if (!r) m.set(ep, r = {ep, integ, n: 0, ok: 0, err: 0, pend: 0, http: new Map(), lat: []}); return r; };
+  const addHttp = (r, code) => r.http.set(code, (r.http.get(code) || 0) + 1);
+  for (const e of S.fEvents) for (const it of e.tl){
+    if (it.req){
+      const r = get(it.req.ep, it.req.integ); r.n++;
+      const end = it.err || it.resp;
+      if (!end){ r.pend++; continue; }
+      const bad = !!it.err || it.resp.lvl === 'erro';
+      if (it.err){ r.err++; addHttp(r, it.err.http); } else if (bad) r.err++; else r.ok++;
+      const ms = (end.ts - it.req.ts) + (end.sub - it.req.sub) / 10000;
+      r.lat.push(ms); calls.push({ms, ep: it.req.ep, req: it.req, e, bad});
+    } else if (it.log.ep){   // Response/Erro sem Request no evento
+      const r = get(it.log.ep, it.log.integ); r.n++;
+      if (it.log.kind === 'reqerr'){ r.err++; addHttp(r, it.log.http); } else if (it.log.lvl === 'erro') r.err++; else r.ok++;
+    }
+  }
+  const rows = [...m.values()];
+  for (const r of rows){
+    r.lat.sort((a, b) => a - b);
+    if (r.lat.length){ r.p50 = pct(r.lat, .5); r.p95 = pct(r.lat, .95); r.max = r.lat[r.lat.length - 1]; }
+    r.httpTxt = [...r.http].sort((a, b) => b[1] - a[1]).map(([c, n]) => `HTTP ${c}×${n}`).join(', ');
+  }
+  return {rows, calls};
+}
+function renderEndpoints(){
+  const {rows, calls} = collectEndpoints();
+  const {k, dir} = S.epSort;
+  rows.sort((a, b) => (k === 'ep' ? a.ep.localeCompare(b.ep) : (a[k] ?? -1) - (b[k] ?? -1)) * dir || b.n - a.n);
+  const tot = {n: 0, err: 0, pend: 0}; for (const r of rows){ tot.n += r.n; tot.err += r.err; tot.pend += r.pend; }
+  const all = calls.map(c => c.ms).sort((a, b) => a - b);
+  const ms = v => v == null ? '' : fmtDur(Math.round(v));
+  const th = (key, label, cls = '') => `<th class="sort ${cls}" data-sort="${key}">${label}${k === key ? (dir < 0 ? ' ▼' : ' ▲') : ''}</th>`;
+  const slow = calls.sort((a, b) => b.ms - a.ms).slice(0, 15);
+  $('#endpoints').innerHTML = `
+    <div class="kpis">
+      <div class="kpi"><span class="muted">Endpoints</span><b>${nf.format(rows.length)}</b></div>
+      <div class="kpi"><span class="muted">Chamadas</span><b>${nf.format(tot.n)}</b></div>
+      <div class="kpi"><span class="muted"><span class="dot erro"></span> Com erro</span><b class="erro-txt">${nf.format(tot.err)}</b></div>
+      <div class="kpi"><span class="muted">Sem resposta</span><b class="${tot.pend ? 'warn' : ''}">${nf.format(tot.pend)}</b></div>
+      <div class="kpi"><span class="muted">Latência p50 / p95</span><b>${all.length ? ms(pct(all, .5)) + ' / ' + ms(pct(all, .95)) : '–'}</b></div>
+    </div>
+    <div class="hint">Considera os eventos do filtro atual. Latência = tempo entre o Request e a Response/Erro ligados. Clique no endpoint para filtrar; nos números de Erros ou Sem resposta para filtrar só eles.</div>
+    <div class="card" style="margin-bottom:14px"><h3>Por endpoint</h3>
+      ${rows.length ? `<table><colgroup><col><col style="width:90px"><col style="width:80px"><col style="width:100px"><col style="width:230px"><col style="width:90px"><col style="width:90px"><col style="width:90px"></colgroup>
+      <thead><tr>${th('ep', 'Endpoint')}<th>Integração</th>${th('n', 'Chamadas', 'num')}${th('pend', 'Sem resposta', 'num')}${th('err', 'Erros')}${th('p50', 'p50', 'num')}${th('p95', 'p95', 'num')}${th('max', 'Máx', 'num')}</tr></thead><tbody>
+      ${rows.map(r => `<tr><td class="click" data-ep="${esc(r.ep)}" title="${esc(r.ep)}">${esc(r.ep)}</td><td>${esc(r.integ)}</td><td class="num">${nf.format(r.n)}</td>
+        <td class="num ${r.pend ? 'warn click' : ''}" ${r.pend ? `data-ep="${esc(r.ep)}" data-pend="1"` : ''}>${r.pend ? nf.format(r.pend) : ''}</td>
+        <td class="${r.err ? 'erro-txt click' : ''}" ${r.err ? `data-ep="${esc(r.ep)}" data-only="erro"` : ''} title="${esc(r.httpTxt)}">${r.err ? nf.format(r.err) + (r.httpTxt ? ` <span class="muted">${esc(r.httpTxt)}</span>` : '') : ''}</td>
+        <td class="num mono">${ms(r.p50)}</td><td class="num mono">${ms(r.p95)}</td><td class="num mono">${ms(r.max)}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="muted">Nenhuma chamada HTTP nos eventos filtrados</div>'}</div>
+    <div class="card"><h3>Chamadas mais lentas <span class="muted" style="font-weight:normal">(clique para abrir o evento)</span></h3>
+      ${slow.length ? `<table><colgroup><col style="width:100px"><col style="width:90px"><col><col style="width:200px"></colgroup>
+      <thead><tr><th>Hora</th><th class="num">Latência</th><th>Endpoint</th><th>Identificador</th></tr></thead><tbody>
+      ${slow.map(c => `<tr><td class="mono">${esc(hms(c.req.dt))}</td><td class="num mono ${c.bad ? 'erro-txt' : ''}">${ms(c.ms)}</td>
+        <td class="click" data-evn="${c.e.n}" title="${esc(c.ep)}">${esc(c.ep)}</td><td class="mono" title="${esc(c.e.ident)}">${esc(c.e.urlId ? urlTail(c.e.ident) : c.e.ident)}</td></tr>`).join('')}
+      </tbody></table>` : '<div class="muted">–</div>'}</div>`;
+}
+
 /* ---------- Exportação ---------- */
 function exportCSV(){
   const cols = ['Id', 'IdentificadorUnico', 'PayloadProcessamento', 'Tipo', 'Mensagem', 'DataCriacao', 'Severidade', 'Status', 'TipoIntegracao', 'NivelEfetivo'];
@@ -587,30 +827,60 @@ function exportCSV(){
 }
 
 /* ---------- Carga ---------- */
+function showLoading(msg, p){
+  $('#loading').style.display = 'flex'; $('#loadTxt').textContent = msg; $('#loadBar').style.width = Math.round((p || 0) * 100) + '%';
+}
+const yieldUI = () => new Promise(r => setTimeout(r, 30));
+// Lê e interpreta o CSV num Web Worker; sem Worker (restrição do navegador) roda na própria página.
+function parseFile(file){
+  return new Promise((resolve, reject) => {
+    const logs = []; let got = false, cleanup = () => {};
+    const onMsg = m => {
+      got = true;
+      if (m.t === 'st') showLoading(m.msg, m.p);
+      else if (m.t === 'batch'){ for (const L of m.logs) logs.push(L); showLoading(`${m.msg} ${nf.format(logs.length)} logs`, m.p); }
+      else if (m.t === 'done'){ cleanup(); resolve({logs, cols: m.cols}); }
+      else if (m.t === 'err'){ cleanup(); reject(new Error(m.msg)); }
+    };
+    const src = $('#wk').textContent;
+    const inline = () => {
+      const me = {onmessage: null};
+      new Function('self', 'postMessage', src)(me, onMsg);
+      me.onmessage({data: file});
+    };
+    try {
+      const url = URL.createObjectURL(new Blob([src], {type: 'text/javascript'}));
+      const w = new Worker(url);
+      cleanup = () => { w.terminate(); URL.revokeObjectURL(url); };
+      w.onmessage = e => onMsg(e.data);
+      w.onerror = e => { cleanup(); if (got) reject(new Error(e.message || 'falha ao interpretar')); else inline(); };
+      w.postMessage(file);
+    } catch { inline(); }
+  });
+}
 async function loadFile(file){
-  $('#loading').style.display = 'flex';
-  await new Promise(r => setTimeout(r, 30));
+  if (S.loading) return;
+  S.loading = true;
+  showLoading('Lendo arquivo…', 0);
+  await yieldUI();
   try {
     const t0 = performance.now();
-    const text = await file.text();
-    const rows = parseCSV(text);
-    const head = rows.shift().map(h => h.trim());
-    const logs = new Array(rows.length); let k = 0;
-    for (const r of rows){
-      if (r.length < 2) continue;
-      const o = {}; for (let i = 0; i < head.length; i++) o[head[i]] = r[i];
-      logs[k] = enrich(o, k); k++;
-    }
-    logs.length = k;
+    const {logs, cols} = await parseFile(file);
+    if (!cols.includes('IdentificadorUnico') || !cols.includes('Mensagem')) throw new Error('colunas esperadas não encontradas no cabeçalho (IdentificadorUnico, Mensagem…)');
+    if (!logs.length) throw new Error('nenhum log encontrado no arquivo');
+    showLoading('Agrupando eventos…', 1); await yieldUI();
     S.logs = logs;
     S.integs = [...new Set(logs.map(l => l.integ))].sort();
     S.tipos = [...new Set(logs.map(l => l.tipo))].sort();
+    S.identSet = new Set(logs.map(l => l.ident.toLowerCase()));
     $('#fInteg').innerHTML = '<option value="">Integração: todas</option>' + S.integs.map(v => `<option>${esc(v)}</option>`).join('');
     $('#fTipo').innerHTML = '<option value="">Tipo: todos</option>' + S.tipos.map(v => `<option>${esc(v)}</option>`).join('');
     buildEvents();
+    S.f = FILTERS0(); S.identsMiss = []; syncInputs();
     S.selEv = null; S.selLog = null;
-    const ts = logs.map(l => l.dt).filter(Boolean).sort();
-    $('#fileInfo').textContent = `${file.name} · ${nf.format(k)} logs · ${ts[0]?.slice(0, 16)} → ${ts[ts.length - 1]?.slice(0, 16)} · ${Math.round(performance.now() - t0)} ms`;
+    let lo = logs[0].dt, hi = lo;
+    for (const l of logs){ if (l.dt && l.dt < lo) lo = l.dt; if (l.dt > hi) hi = l.dt; }
+    $('#fileInfo').textContent = `${file.name} · ${nf.format(logs.length)} logs · ${lo.slice(0, 16)} → ${hi.slice(0, 16)} · ${Math.round(performance.now() - t0)} ms`;
     $('#drop').style.display = 'none';
     $('#filters').hidden = false;
     showTab(S.tab);
@@ -619,7 +889,7 @@ async function loadFile(file){
   } catch (err){
     alert('Erro ao ler o arquivo: ' + err.message);
     console.error(err);
-  } finally { $('#loading').style.display = 'none'; }
+  } finally { S.loading = false; $('#loading').style.display = 'none'; }
 }
 
 /* ---------- Eventos de UI ---------- */
@@ -638,7 +908,7 @@ function setFilter(patch, tab){
 }
 function syncInputs(){
   $('#q').value = S.f.q; $('#qPayload').checked = S.f.payload;
-  $('#fInteg').value = S.f.integ; $('#fTipo').value = S.f.tipo;
+  $('#fInteg').value = S.f.integ; $('#fTipo').value = S.f.tipo; $('#fPend').checked = S.f.pend;
   $('#fFrom').value = S.f.from || ''; $('#fTo').value = S.f.to || '';
   $$('.chip[data-st]').forEach(c => c.classList.toggle('off', !S.f.st[c.dataset.st]));
 }
@@ -653,6 +923,7 @@ $$('.tabs button').forEach(b => b.onclick = () => showTab(b.dataset.tab));
 let deb;
 $('#q').oninput = e => { clearTimeout(deb); deb = setTimeout(() => setFilter({q: e.target.value}), 300); };
 $('#qPayload').onchange = e => setFilter({payload: e.target.checked});
+$('#fPend').onchange = e => setFilter({pend: e.target.checked});
 $('#fInteg').onchange = e => setFilter({integ: e.target.value});
 $('#fTipo').onchange = e => setFilter({tipo: e.target.value});
 $('#fFrom').onchange = e => setFilter({from: e.target.value || null});
@@ -664,10 +935,10 @@ $$('.chip[data-st]').forEach(c => c.onclick = ev => {
   else S.f.st[k] = !S.f.st[k];
   syncInputs(); applyFilters();
 });
-$('#btnClear').onclick = () => { clearSelection(); setFilter({q: '', payload: false, integ: '', tipo: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null, tpl: '', ident: ''}); };
+$('#btnClear').onclick = () => { clearSelection(); S.identsMiss = []; setFilter(FILTERS0()); };
 document.addEventListener('keydown', e => { if (e.key === 'Escape' && !e.target.closest('input,select,textarea')) clearSelection(); });
 $('#gap').onchange = () => { if (!S.logs.length) return; buildEvents(); S.selEv = null; renderEventDetail(); applyFilters(); };
-$('#tags').onclick = e => { const k = e.target.dataset.rm; if (k) setFilter({[k]: ''}); };
+$('#tags').onclick = e => { const k = e.target.dataset.rm; if (!k) return; if (k === 'idents') S.identsMiss = []; setFilter({[k]: k === 'idents' ? null : ''}); };
 
 $('#evList').onclick = e => {
   if (e.target.dataset.more){ S.evShown += PAGE; renderEvents(); return; }
@@ -688,15 +959,18 @@ $('#evDetail').addEventListener('toggle', e => { if (e.target.tagName === 'DETAI
 
 function onDetailClick(e){
   const t = e.target;
-  if (t.dataset.copy){ navigator.clipboard.writeText(prettyPayload(S.logs[+t.dataset.copy].payload)); t.textContent = 'copiado!'; setTimeout(() => t.textContent = 'copiar', 1200); return; }
+  if (t.dataset.copy){ copyText(prettyPayload(S.logs[+t.dataset.copy].payload)).then(() => flash(t)); return; }
   if (t.id === 'hideDebug'){ S.hideDebug = t.checked; renderEventDetail(); return; }
   const a = t.dataset.act; if (!a) return;
   if (a === 'close'){ clearSelection(); return; }
   const ev = S.selEv, L = S.selLog;
-  if (a === 'identEv') setFilter({ident: ev.ident, q: '', tpl: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null}, 'eventos');
-  if (a === 'identLog') setFilter({ident: ev.ident, q: '', tpl: '', st: {erro: true, sucesso: true, debug: true}, from: null, to: null}, 'logs');
-  if (a === 'copyIdent'){ navigator.clipboard.writeText(ev.ident); t.textContent = 'copiado!'; }
-  if (a === 'identLog2') setFilter({ident: L.ident, q: '', tpl: ''}, 'logs');
+  if (a === 'identEv') setFilter({...FILTERS0(), ident: ev.ident}, 'eventos');
+  if (a === 'identLog') setFilter({...FILTERS0(), ident: ev.ident}, 'logs');
+  if (a === 'copyIdent') copyText(ev.ident).then(() => flash(t));
+  if (a === 'copyEvText') copyText(eventText(ev)).then(() => flash(t));
+  if (a === 'copyEvJson') copyText(eventJSON(ev)).then(() => flash(t));
+  if (a === 'copyLog') copyText(JSON.stringify(logObj(L), null, 2)).then(() => flash(t));
+  if (a === 'identLog2') setFilter({...FILTERS0(), ident: L.ident}, 'logs');
   if (a === 'openEv'){ S.selEv = L.ev; showTab('eventos'); renderEventDetail(); }
 }
 $('#evDetail').onclick = onDetailClick;
@@ -710,6 +984,35 @@ $('#summary').onclick = e => {
   if (t.dataset.only) patch.st = {erro: true, sucesso: false, debug: false};
   setFilter(patch, 'eventos');
 };
+function openEvent(ev){
+  setFilter({...FILTERS0(), ident: ev.ident}, 'eventos');
+  const i = S.fEvents.indexOf(ev); if (i >= S.evShown) S.evShown = i + 1;
+  S.selEv = ev; renderEvents(); renderEventDetail();
+  $('#evList tr.sel')?.scrollIntoView({block: 'center'});
+}
+$('#endpoints').onclick = e => {
+  const th = e.target.closest('th[data-sort]');
+  if (th){ const k = th.dataset.sort; S.epSort = {k, dir: S.epSort.k === k ? -S.epSort.dir : (k === 'ep' ? 1 : -1)}; renderEndpoints(); return; }
+  const t = e.target.closest('[data-ep],[data-evn]'); if (!t) return;
+  if (t.dataset.evn){ openEvent(S.events[+t.dataset.evn]); return; }
+  const patch = {ep: t.dataset.ep};
+  if (t.dataset.only) patch.st = {erro: true, sucesso: false, debug: false};
+  if (t.dataset.pend) patch.pend = true;
+  setFilter(patch, 'eventos');
+};
+
+/* ---------- Lista de identificadores ---------- */
+function setListIds(ids){
+  if (!ids){ S.identsMiss = []; setFilter({idents: null}); return; }
+  const set = new Set(ids.map(x => x.toLowerCase()));
+  S.identsMiss = [...set].filter(x => !S.identSet.has(x));
+  setFilter({idents: set}, S.tab === 'resumo' || S.tab === 'endpoints' ? 'eventos' : undefined);
+}
+$('#btnList').onclick = () => { $('#listTxt').value = S.f.idents ? [...S.f.idents].join('\n') : ''; $('#dlgList').showModal(); $('#listTxt').focus(); };
+$('#listCancel').onclick = () => $('#dlgList').close();
+$('#listClear').onclick = () => { $('#dlgList').close(); setListIds(null); };
+$('#listOk').onclick = () => { const ids = $('#listTxt').value.split(/[\s,;]+/).filter(Boolean); $('#dlgList').close(); setListIds(ids.length ? ids : null); };
+
 /* ---------- Divisor redimensionável ---------- */
 function setDetailWidth(px){
   $$('.detail').forEach(d => d.style.width = px ? px + 'px' : '');
